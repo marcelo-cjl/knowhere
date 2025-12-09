@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -60,6 +61,45 @@
 #endif
 
 namespace knowhere {
+
+// Helper function to export Faiss HNSW graph to file
+inline void
+ExportFaissHnswGraph(const faiss::IndexHNSW* index_hnsw, const std::string& index_prefix) {
+    if (index_hnsw == nullptr) {
+        return;
+    }
+
+    const faiss::HNSW& hnsw = index_hnsw->hnsw;
+    std::ofstream graph_file(index_prefix + ".graph", std::ios::binary);
+
+    uint32_t num_vertices = static_cast<uint32_t>(index_hnsw->ntotal);
+    uint32_t entry_point = static_cast<uint32_t>(hnsw.entry_point);
+    graph_file.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+    graph_file.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+    std::vector<uint32_t> indices(num_vertices + 1, 0);
+    graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+    indices[0] = 0;
+
+    for (uint32_t u = 0; u < num_vertices; ++u) {
+        size_t begin, end;
+        hnsw.neighbor_range(u, 0, &begin, &end);
+        std::vector<uint32_t> neighbors;
+        for (size_t j = begin; j < end; ++j) {
+            faiss::HNSW::storage_idx_t neighbor = hnsw.neighbors[j];
+            if (neighbor >= 0) {
+                neighbors.push_back(static_cast<uint32_t>(neighbor));
+            }
+        }
+        indices[u + 1] = indices[u] + neighbors.size();
+        graph_file.write(reinterpret_cast<const char*>(neighbors.data()), neighbors.size() * sizeof(uint32_t));
+    }
+
+    // re-write the indices to the beginning of the file
+    graph_file.seekp(sizeof(uint32_t) + sizeof(uint32_t));
+    graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+    graph_file.close();
+}
 
 //
 class BaseFaissIndexNode : public IndexNode {
@@ -242,6 +282,21 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
             }
         }
 
+        // export graph if enabled
+        if (config) {
+            auto cfg = static_cast<const knowhere::BaseConfig&>(*config);
+            if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+                for (size_t i = 0; i < indexes.size(); ++i) {
+                    auto index_hnsw = dynamic_cast<const faiss::IndexHNSW*>(indexes[i].get());
+                    if (index_hnsw != nullptr) {
+                        std::string prefix = indexes.size() > 1 ? cfg.index_prefix.value() + "_" + std::to_string(i)
+                                                                : cfg.index_prefix.value();
+                        ExportFaissHnswGraph(index_hnsw, prefix);
+                    }
+                }
+            }
+        }
+
         return Status::success;
     }
 
@@ -290,6 +345,18 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
             } else {
                 LOG_KNOWHERE_WARNING_ << "faiss inner error: " << e.what();
                 return Status::faiss_inner_error;
+            }
+        }
+
+        // export graph if enabled
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            for (size_t i = 0; i < indexes.size(); ++i) {
+                auto index_hnsw = dynamic_cast<const faiss::IndexHNSW*>(indexes[i].get());
+                if (index_hnsw != nullptr) {
+                    std::string prefix = indexes.size() > 1 ? cfg.index_prefix.value() + "_" + std::to_string(i)
+                                                            : cfg.index_prefix.value();
+                    ExportFaissHnswGraph(index_hnsw, prefix);
+                }
             }
         }
 

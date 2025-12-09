@@ -30,6 +30,7 @@
 #include "common/cuvs/integration/cuvs_knowhere_index.hpp"
 #include "common/cuvs/integration/type_mappers.hpp"
 #include "common/cuvs/proto/cuvs_index_kind.hpp"
+#include "hnswlib/hnswalg.h"
 #include "index/gpu_cuvs/gpu_cuvs_brute_force_config.h"
 #include "index/gpu_cuvs/gpu_cuvs_cagra_config.h"
 #include "index/gpu_cuvs/gpu_cuvs_ivf_flat_config.h"
@@ -184,7 +185,7 @@ struct GpuCuvsIndexNode : public IndexNode {
     }
 
     Status
-    Deserialize(const BinarySet& binset, std::shared_ptr<Config>) override {
+    Deserialize(const BinarySet& binset, std::shared_ptr<Config> cfg) override {
         auto result = Status::success;
         std::stringbuf buf;
         auto binary = binset.GetByName(this->Type());
@@ -196,7 +197,42 @@ struct GpuCuvsIndexNode : public IndexNode {
             std::istream is(&buf);
             result = DeserializeFromStream(is);
         }
+
+        // export graph if enabled (only for CAGRA)
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+            if (result == Status::success && cfg) {
+                auto base_cfg = static_cast<const knowhere::BaseConfig&>(*cfg);
+                if (base_cfg.enable_export.has_value() && base_cfg.enable_export.value() &&
+                    base_cfg.index_prefix.has_value()) {
+                    ExportCagraGraph(base_cfg.index_prefix.value());
+                }
+            }
+        }
         return result;
+    }
+
+    void
+    ExportCagraGraph(const std::string& index_prefix) {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+            try {
+                // Serialize CAGRA to hnswlib format
+                std::stringbuf hnswlib_buf;
+                std::ostream os(&hnswlib_buf);
+                index_.serialize_to_hnswlib(os);
+                os.flush();
+
+                // Load into hnswlib index and export
+                std::istream is(&hnswlib_buf);
+                hnswlib::SpaceInterface<float>* space = nullptr;
+                auto hnsw_index = std::make_unique<hnswlib::HierarchicalNSW<DataType, float, hnswlib::None>>(space);
+                hnsw_index->loadIndexFromGpuFormat(is);
+
+                // Export the graph
+                hnsw_index->exportGraph(index_prefix);
+            } catch (const std::exception& e) {
+                LOG_KNOWHERE_WARNING_ << "Failed to export CAGRA graph: " << e.what();
+            }
+        }
     }
 
     Status

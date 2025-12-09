@@ -12,6 +12,7 @@
 #include "knowhere/feder/DiskANN.h"
 
 #include <cstdint>
+#include <fstream>
 
 #include "diskann/aux_utils.h"
 #include "diskann/linux_aligned_file_reader.h"
@@ -32,6 +33,89 @@
 #include "knowhere/utils.h"
 
 namespace knowhere {
+
+// Helper function to export DiskANN graph to file
+// DiskANN stores graph on disk, so we need to read from disk index file
+template <typename DataType>
+void
+ExportDiskANNGraph(diskann::PQFlashIndex<DataType>* pq_flash_index, const std::string& index_prefix,
+                   const std::string& export_prefix) {
+    if (pq_flash_index == nullptr) {
+        return;
+    }
+
+    std::string disk_index_file = diskann::get_disk_index_filename(index_prefix);
+    std::ifstream disk_file(disk_index_file, std::ios::binary);
+    if (!disk_file.is_open()) {
+        LOG_KNOWHERE_WARNING_ << "Failed to open disk index file for export: " << disk_index_file;
+        return;
+    }
+
+    // Read metadata from disk index file
+    uint64_t file_size, num_points, medoid_id, max_node_len, nnodes_per_sector;
+    disk_file.read(reinterpret_cast<char*>(&file_size), sizeof(uint64_t));
+    disk_file.read(reinterpret_cast<char*>(&num_points), sizeof(uint64_t));
+    disk_file.read(reinterpret_cast<char*>(&medoid_id), sizeof(uint64_t));
+    disk_file.read(reinterpret_cast<char*>(&max_node_len), sizeof(uint64_t));
+    disk_file.read(reinterpret_cast<char*>(&nnodes_per_sector), sizeof(uint64_t));
+
+    uint64_t disk_bytes_per_point = pq_flash_index->get_data_dim() * sizeof(DataType);
+    uint64_t max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
+
+    // Create output file
+    std::ofstream graph_file(export_prefix + ".graph", std::ios::binary);
+    uint32_t num_vertices = static_cast<uint32_t>(num_points);
+    uint32_t entry_point = static_cast<uint32_t>(medoid_id);
+    graph_file.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+    graph_file.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+    std::vector<uint32_t> indices(num_vertices + 1, 0);
+    graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+    indices[0] = 0;
+
+    // Read each node from disk and export neighbors
+    bool long_node = max_node_len > diskann::defaults::SECTOR_LEN;
+    uint64_t nsectors_per_node =
+        long_node ? ((max_node_len + diskann::defaults::SECTOR_LEN - 1) / diskann::defaults::SECTOR_LEN) : 1;
+
+    std::vector<char> sector_buf(diskann::defaults::SECTOR_LEN * (long_node ? nsectors_per_node : 1));
+
+    for (uint32_t node_id = 0; node_id < num_vertices; ++node_id) {
+        uint64_t sector_offset;
+        char* node_buf;
+
+        if (long_node) {
+            sector_offset = (node_id * nsectors_per_node + 1) * diskann::defaults::SECTOR_LEN;
+            disk_file.seekg(sector_offset);
+            disk_file.read(sector_buf.data(), diskann::defaults::SECTOR_LEN * nsectors_per_node);
+            node_buf = sector_buf.data();
+        } else {
+            uint64_t sector_num = node_id / nnodes_per_sector + 1;
+            sector_offset = sector_num * diskann::defaults::SECTOR_LEN;
+            disk_file.seekg(sector_offset);
+            disk_file.read(sector_buf.data(), diskann::defaults::SECTOR_LEN);
+            node_buf = sector_buf.data() + (node_id % nnodes_per_sector) * max_node_len;
+        }
+
+        // Get neighbors from node buffer (neighbors start after coordinates)
+        unsigned* nhood = reinterpret_cast<unsigned*>(node_buf + disk_bytes_per_point);
+        unsigned num_neighbors = *nhood;
+        unsigned* neighbors = nhood + 1;
+
+        std::vector<uint32_t> neighbor_list(neighbors, neighbors + num_neighbors);
+        indices[node_id + 1] = indices[node_id] + num_neighbors;
+        graph_file.write(reinterpret_cast<const char*>(neighbor_list.data()), neighbor_list.size() * sizeof(uint32_t));
+    }
+
+    // Re-write indices at the beginning
+    graph_file.seekp(sizeof(uint32_t) + sizeof(uint32_t));
+    graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+    graph_file.close();
+    disk_file.close();
+
+    LOG_KNOWHERE_INFO_ << "Exported DiskANN graph to " << export_prefix << ".graph";
+}
+
 template <typename DataType>
 class DiskANNIndexNode : public IndexNode {
     static_assert(KnowhereFloatTypeCheck<DataType>::value,
@@ -552,6 +636,13 @@ DiskANNIndexNode<DataType>::Deserialize(const BinarySet& binset, std::shared_ptr
 
     is_prepared_.store(true);
     LOG_KNOWHERE_INFO_ << "End of diskann loading.";
+
+    // export graph if enabled
+    if (prep_conf.enable_export.has_value() && prep_conf.enable_export.value()) {
+        std::string export_prefix = prep_conf.index_prefix.has_value() ? prep_conf.index_prefix.value() : index_prefix_;
+        ExportDiskANNGraph<DataType>(pq_flash_index_.get(), index_prefix_, export_prefix);
+    }
+
     return Status::success;
 }
 

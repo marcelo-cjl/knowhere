@@ -487,7 +487,7 @@ class HnswIndexNode : public IndexNode {
     }
 
     Status
-    Deserialize(const BinarySet& binset, std::shared_ptr<Config>) override {
+    Deserialize(const BinarySet& binset, std::shared_ptr<Config> cfg) override {
         if (index_) {
             delete index_;
         }
@@ -502,7 +502,11 @@ class HnswIndexNode : public IndexNode {
 
             hnswlib::SpaceInterface<DistType>* space = nullptr;
             index_ = new (std::nothrow) hnswlib::HierarchicalNSW<DataType, DistType, quant_type>(space);
-            index_->loadIndex(reader);
+            if (cfg) {
+                index_->loadIndex(reader, *cfg);
+            } else {
+                index_->loadIndex(reader);
+            }
             LOG_KNOWHERE_INFO_ << "Loaded HNSW index. #points num:" << index_->max_elements_ << " #M:" << index_->M_
                                << " #max level:" << index_->maxlevel_
                                << " #ef_construction:" << index_->ef_construction_

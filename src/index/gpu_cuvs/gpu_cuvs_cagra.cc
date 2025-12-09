@@ -149,6 +149,13 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
                         return Status::invalid_binary_set;
                     }
                     hnsw_index_->base_layer_only = true;
+
+                    // export graph if enabled
+                    auto base_cfg = static_cast<const knowhere::BaseConfig&>(cagra_cfg);
+                    if (base_cfg.enable_export.has_value() && base_cfg.enable_export.value() &&
+                        base_cfg.index_prefix.has_value()) {
+                        hnsw_index_->exportGraph(base_cfg.index_prefix.value());
+                    }
                 } catch (std::exception& e) {
                     LOG_KNOWHERE_WARNING_ << "hnsw inner error: " << e.what();
                     return Status::hnsw_inner_error;

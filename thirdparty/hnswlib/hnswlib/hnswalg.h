@@ -3,7 +3,9 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <stdexcept>
 
 #include "io/file_io.h"
@@ -25,9 +27,10 @@
 #include <unordered_set>
 
 #ifdef KNOWHERE_WITH_CUVS
+#include <cuvs/distance/distance.hpp>
 #include <raft/core/detail/mdspan_numpy_serializer.hpp>
 #include <raft/neighbors/detail/cagra/cagra_serialize.cuh>
-#include <cuvs/distance/distance.hpp>
+
 #include "common/cuvs/integration/type_mappers.hpp"
 #endif
 
@@ -899,6 +902,37 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 input.read(linkLists_[i], linkListSize);
             }
         }
+
+        // export graph if enabled
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            exportGraph(cfg.index_prefix.value());
+        }
+    }
+
+    void
+    exportGraph(const std::string& index_prefix) {
+        std::ofstream graph_file(index_prefix + ".graph", std::ios::binary);
+        uint32_t num_vertices = static_cast<uint32_t>(cur_element_count);
+        uint32_t entry_point = static_cast<uint32_t>(enterpoint_node_);
+        graph_file.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+        graph_file.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+        std::vector<uint32_t> indices(num_vertices + 1, 0);
+        graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+        indices[0] = 0;
+
+        for (uint32_t u = 0; u < num_vertices; ++u) {
+            linklistsizeint* ll = get_linklist0(u);
+            unsigned short int size = getListCount(ll);
+            tableint* neighbors = (tableint*)(ll + 1);
+            indices[u + 1] = indices[u] + size;
+            graph_file.write(reinterpret_cast<const char*>(neighbors), size * sizeof(tableint));
+        }
+
+        // re-write the indices to the beginning of the file
+        graph_file.seekp(sizeof(uint32_t) + sizeof(uint32_t));
+        graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+        graph_file.close();
     }
 
     void
@@ -1046,20 +1080,31 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
     }
 
+    void
+    loadIndex(knowhere::MemoryIOReader& input, const knowhere::Config& config, size_t max_elements_i = 0) {
+        loadIndex(input, max_elements_i);
+
+        // export graph if enabled
+        auto cfg = static_cast<const knowhere::BaseConfig&>(config);
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            exportGraph(cfg.index_prefix.value());
+        }
+    }
+
 #ifdef KNOWHERE_WITH_CUVS
     void
     loadIndexFromGpuFormat(std::istream& input, size_t max_elements_i = 0) {
         using idxt = cuvs_knowhere::cuvs_indexing_t<cuvs_proto::cuvs_index_kind::cagra>;
-        
+
         char dtype_string[4];
         input.read(dtype_string, 4);
         auto ver = raft::detail::numpy_serializer::deserialize_scalar<int>(input);
         if (ver != raft::neighbors::cagra::detail::serialization_version) {
-            throw std::runtime_error("serialization version mismatch, expected " + 
-                                std::to_string(raft::neighbors::cagra::detail::serialization_version) +
-                                ", got " + std::to_string(ver));
+            throw std::runtime_error("serialization version mismatch, expected " +
+                                     std::to_string(raft::neighbors::cagra::detail::serialization_version) + ", got " +
+                                     std::to_string(ver));
         }
-        
+
         auto n_rows = raft::detail::numpy_serializer::deserialize_scalar<idxt>(input);
         auto dim = raft::detail::numpy_serializer::deserialize_scalar<std::uint32_t>(input);
         auto graph_degree = raft::detail::numpy_serializer::deserialize_scalar<std::uint32_t>(input);
@@ -1108,7 +1153,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         max_elements_ = max_elements;
 
-        size_data_per_element_ = static_cast<std::size_t>(graph_degree * sizeof(idxt) + 4 + (n_rows > 0 ? dim * sizeof(data_t) : 0) + 8);
+        size_data_per_element_ =
+            static_cast<std::size_t>(graph_degree * sizeof(idxt) + 4 + (n_rows > 0 ? dim * sizeof(data_t) : 0) + 8);
         label_offset_ = size_data_per_element_ - 8;
         offsetData_ = graph_degree * sizeof(idxt) + 4;
         maxlevel_ = 1;
@@ -1118,11 +1164,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         M_ = graph_degree / 2;
         mult_ = 0.42424242;
         ef_construction_ = 500;
-        
+
         data_level0_memory_ = (char*)malloc(max_elements * size_data_per_element_);  // NOLINT
         if (data_level0_memory_ == nullptr)
             throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
-        
+
         [[maybe_unused]] auto header = raft::detail::numpy_serializer::read_header(input);
         for (size_t i = 0; i < max_elements; i++) {
             auto offset = i * size_data_per_element_;
@@ -1132,11 +1178,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         auto include_dataset = raft::detail::numpy_serializer::deserialize_scalar<bool>(input);
         if (include_dataset) {
-            constexpr uint32_t kSerializeEmptyDataset   = 1;
+            constexpr uint32_t kSerializeEmptyDataset = 1;
             if (kSerializeEmptyDataset == raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input)) {
-                [[maybe_unused]] auto suggested_dim = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
+                [[maybe_unused]] auto suggested_dim =
+                    raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
             } else {
-                [[maybe_unused]] auto data_type = raft::detail::numpy_serializer::deserialize_scalar<cudaDataType_t>(input);
+                [[maybe_unused]] auto data_type =
+                    raft::detail::numpy_serializer::deserialize_scalar<cudaDataType_t>(input);
                 [[maybe_unused]] auto n_rows = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
                 auto dim = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
                 [[maybe_unused]] auto stride = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
@@ -1148,7 +1196,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             }
         }
         for (size_t i = 0; i < max_elements; i++) {
-            auto offset = i * size_data_per_element_ + sizeof(int) + graph_degree * sizeof(idxt) + (n_rows > 0 ? dim * sizeof(data_t) : 0);
+            auto offset = i * size_data_per_element_ + sizeof(int) + graph_degree * sizeof(idxt) +
+                          (n_rows > 0 ? dim * sizeof(data_t) : 0);
             memcpy(data_level0_memory_ + offset, &i, sizeof(size_t));
         }
 
