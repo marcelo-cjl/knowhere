@@ -21,6 +21,8 @@
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/neighbors/common.hpp>
 #include <cuvs/neighbors/ivf_pq.hpp>
+#include <fstream>
+#include <iostream>
 #include <istream>
 #include <limits>
 #include <ostream>
@@ -79,6 +81,15 @@ struct cuvs_index_type_mapper<true, cuvs_proto::cuvs_index_kind::cagra, DataType
     using data_type = DataType;
     using indexing_type = cuvs_indexing_t<cuvs_proto::cuvs_index_kind::cagra>;
     using type = cuvs_proto::cuvs_index<cuvs::neighbors::cagra::index, data_type, indexing_type>;
+    using underlying_index_type = typename type::vector_index_type;
+    using index_params_type = typename type::index_params_type;
+    using search_params_type = typename type::search_params_type;
+};
+template <typename DataType>
+struct cuvs_index_type_mapper<true, cuvs_proto::cuvs_index_kind::vamana, DataType> : std::true_type {
+    using data_type = DataType;
+    using indexing_type = cuvs_indexing_t<cuvs_proto::cuvs_index_kind::vamana>;
+    using type = cuvs_proto::cuvs_index<cuvs::neighbors::vamana::index, data_type, indexing_type>;
     using underlying_index_type = typename type::vector_index_type;
     using index_params_type = typename type::index_params_type;
     using search_params_type = typename type::search_params_type;
@@ -313,6 +324,20 @@ config_to_index_params(cuvs_knowhere_config const& raw_config) {
         result.graph_build_params = build_algo_string_to_cagra_build_algo(
             *(config.build_algo), result.intermediate_graph_degree, *(config.nn_descent_niter), result.metric);
     }
+    if constexpr (IndexKind == cuvs_proto::cuvs_index_kind::vamana) {
+        // cuVS Vamana only supports L2. For COSINE, we use L2 after normalization
+        // (normalized L2 distance is equivalent to COSINE similarity for ranking).
+        result.metric = cuvs::distance::DistanceType::L2Expanded;
+        result.graph_degree = *(config.graph_degree);
+        result.visited_size = *(config.visited_size);
+        result.vamana_iters = *(config.vamana_iters);
+        result.alpha = *(config.alpha);
+        result.max_fraction = *(config.max_fraction);
+        result.batch_base = *(config.batch_base);
+        result.queue_size = *(config.queue_size);
+        result.reverse_batchsize = 1000000;
+    }
+
     return result;
 }
 
@@ -334,6 +359,20 @@ config_to_search_params(cuvs_knowhere_config const& raw_config) {
         result.preferred_shmem_carveout = *(config.preferred_shmem_carveout);
     }
     if constexpr (IndexKind == cuvs_proto::cuvs_index_kind::cagra) {
+        result.max_queries = *(config.max_queries);
+        result.itopk_size = *(config.itopk_size);
+        result.max_iterations = *(config.max_iterations);
+        result.algo = search_algo_string_to_cagra_search_algo(*(config.search_algo));
+        result.team_size = *(config.team_size);
+        result.search_width = *(config.search_width);
+        result.min_iterations = *(config.min_iterations);
+        result.thread_block_size = *(config.thread_block_size);
+        result.hashmap_mode = hashmap_mode_string_to_cagra_hashmap_mode(*(config.hashmap_mode));
+        result.hashmap_min_bitlen = *(config.hashmap_min_bitlen);
+        result.hashmap_max_fill_rate = *(config.hashmap_max_fill_rate);
+        result.persistent = *(config.persistent);
+    }
+    if constexpr (IndexKind == cuvs_proto::cuvs_index_kind::vamana) {
         result.max_queries = *(config.max_queries);
         result.itopk_size = *(config.itopk_size);
         result.max_iterations = *(config.max_iterations);
@@ -430,8 +469,8 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
             auto device_data = raft::make_device_matrix<data_type, input_indexing_type>(res, row_count, feature_count);
             auto device_data_view = device_data.view();
             raft::copy(res, device_data_view, host_data);
-            raft::linalg::row_normalize(res, raft::make_const_mdspan(device_data_view), device_data_view,
-                                        raft::linalg::NormType::L2Norm);
+            raft::linalg::row_normalize<raft::linalg::L2Norm>(res, raft::make_const_mdspan(device_data_view),
+                                                              device_data_view);
             auto host_data_view = raft::make_host_matrix_view(const_cast<data_type*>(data), row_count, feature_count);
             raft::copy(res, host_data_view, device_data_view);
             res.sync_stream();
@@ -447,6 +486,27 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
         } else {
             index_ = cuvs_index_type::template build<data_type, indexing_type, input_indexing_type>(
                 res, index_params, raft::make_const_mdspan(host_data));
+        }
+
+        // Auto-serialize graph to file if dataset_name is provided
+        if (config.dataset_name.has_value() && !config.dataset_name->empty()) {
+            if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra ||
+                          index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+                std::string index_type_str;
+                if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+                    index_type_str = "cagra";
+                } else if constexpr (index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+                    index_type_str = "vamana";
+                }
+                std::string filename = *config.dataset_name + "_" + index_type_str + "_graph.bin";
+                try {
+                    serialize_graph_to_file(filename);
+                } catch (const std::exception& e) {
+                    // Log warning but don't fail the training
+                    std::cerr << "Warning: Failed to auto-serialize graph to " << filename << ": " << e.what()
+                              << std::endl;
+                }
+            }
         }
     }
 
@@ -470,8 +530,8 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
 
         if (config.metric_type == knowhere::metric::COSINE) {
             auto device_data_view = device_data_storage.view();
-            raft::linalg::row_normalize(res, raft::make_const_mdspan(device_data_view), device_data_view,
-                                        raft::linalg::NormType::L2Norm);
+            raft::linalg::row_normalize<raft::linalg::L2Norm>(res, raft::make_const_mdspan(device_data_view),
+                                                              device_data_view);
         }
 
         auto device_bitset = std::optional<
@@ -590,7 +650,175 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
         }
     }
 
-    auto static deserialize(std::istream& is) {
+    void
+    serialize_graph_to_file(const std::string& filename) const {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra ||
+                      index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+            auto scoped_device = raft::device_setter{device_id};
+            auto const& res = get_device_resources_without_mempool();
+            RAFT_EXPECTS(index_, "Index has not yet been trained");
+
+            // Get the graph from the index
+            auto graph_view = index_->get_vector_index().graph();
+
+            int64_t num_nodes = graph_view.extent(0);
+            int64_t graph_degree = graph_view.extent(1);
+            size_t graph_size = num_nodes * graph_degree;
+
+            // Allocate host memory and copy graph
+            std::vector<indexing_type> host_graph(graph_size);
+            RAFT_CUDA_TRY(cudaMemcpy(host_graph.data(), graph_view.data_handle(), graph_size * sizeof(indexing_type),
+                                     cudaMemcpyDeviceToHost));
+            raft::resource::sync_stream(res);
+
+            // Write graph to file
+            std::ofstream out(filename, std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("Failed to open file for writing: " + filename);
+            }
+
+            // Write header: [num_nodes, graph_degree]
+            out.write(reinterpret_cast<const char*>(&num_nodes), sizeof(int64_t));
+            out.write(reinterpret_cast<const char*>(&graph_degree), sizeof(int64_t));
+
+            // Write graph data
+            out.write(reinterpret_cast<const char*>(host_graph.data()), graph_size * sizeof(indexing_type));
+
+            out.close();
+        } else {
+            throw std::runtime_error("Graph serialization is only supported for CAGRA and Vamana indexes");
+        }
+    }
+
+    void
+    serialize_graph_to_fbin_format(const std::string& filename) const {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra ||
+                      index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+            auto scoped_device = raft::device_setter{device_id};
+            auto const& res = get_device_resources_without_mempool();
+            RAFT_EXPECTS(index_, "Index has not yet been trained");
+
+            // Get the graph from the index
+            auto graph_view = index_->get_vector_index().graph();
+
+            uint32_t num_vertices = static_cast<uint32_t>(graph_view.extent(0));
+            uint32_t graph_degree = static_cast<uint32_t>(graph_view.extent(1));
+            size_t graph_size = static_cast<size_t>(num_vertices) * graph_degree;
+
+            // Allocate host memory and copy graph
+            std::vector<indexing_type> host_graph(graph_size);
+            RAFT_CUDA_TRY(cudaMemcpy(host_graph.data(), graph_view.data_handle(), graph_size * sizeof(indexing_type),
+                                     cudaMemcpyDeviceToHost));
+            raft::resource::sync_stream(res);
+
+            // Get entry point
+            uint32_t entry_point = 0;
+            if constexpr (index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+                entry_point = static_cast<uint32_t>(index_->get_vector_index().medoid());
+            } else {
+                // CAGRA: compute entry point as the nearest point to the centroid
+                entry_point = compute_centroid_nearest();
+            }
+
+            // Invalid neighbor value for indexing_type (uint32_t -> UINT32_MAX, uint64_t -> UINT64_MAX)
+            constexpr indexing_type invalid_neighbor = std::numeric_limits<indexing_type>::max();
+
+            // Build CSR format: filter invalid neighbors
+            std::vector<uint32_t> indices(num_vertices + 1);
+            std::vector<int32_t> neighbors;
+            neighbors.reserve(graph_size);
+
+            indices[0] = 0;
+            for (uint32_t u = 0; u < num_vertices; ++u) {
+                size_t row_offset = static_cast<size_t>(u) * graph_degree;
+                for (uint32_t k = 0; k < graph_degree; ++k) {
+                    indexing_type neighbor = host_graph[row_offset + k];
+                    // Filter invalid neighbors (invalid value can be anywhere in the neighbor list)
+                    if (neighbor != invalid_neighbor) {
+                        neighbors.push_back(static_cast<int32_t>(neighbor));
+                    }
+                }
+                indices[u + 1] = static_cast<uint32_t>(neighbors.size());
+            }
+
+            // Write graph to file in CSR format
+            std::ofstream out(filename, std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("Failed to open file for writing: " + filename);
+            }
+
+            // Write header: [num_vertices (uint32), entry_point (uint32)]
+            out.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+            out.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+            // Write CSR indices
+            out.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+
+            // Write neighbors
+            out.write(reinterpret_cast<const char*>(neighbors.data()), neighbors.size() * sizeof(int32_t));
+
+            out.close();
+        } else {
+            throw std::runtime_error(
+                "Cardinal format graph serialization is only supported for CAGRA and Vamana indexes");
+        }
+    }
+
+    uint32_t
+    compute_centroid_nearest() const {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+            auto const& res = get_device_resources_without_mempool();
+            auto dataset_view = index_->get_vector_index().dataset();
+
+            // Check if dataset is available
+            if (dataset_view.data_handle() == nullptr || dataset_view.extent(0) == 0) {
+                throw std::runtime_error(
+                    "Cannot compute entry point: dataset is not available in CAGRA index. "
+                    "Please ensure the index was built with dataset included.");
+            }
+
+            int64_t num_vectors = dataset_view.extent(0);
+            int64_t dim = dataset_view.extent(1);
+
+            // Copy dataset to host
+            std::vector<data_type> host_dataset(num_vectors * dim);
+            RAFT_CUDA_TRY(cudaMemcpy2D(host_dataset.data(), dim * sizeof(data_type), dataset_view.data_handle(),
+                                       dataset_view.stride(0) * sizeof(data_type), dim * sizeof(data_type), num_vectors,
+                                       cudaMemcpyDeviceToHost));
+            raft::resource::sync_stream(res);
+
+            // Compute centroid (mean of all vectors)
+            std::vector<double> centroid(dim, 0.0);
+            for (int64_t i = 0; i < num_vectors; ++i) {
+                for (int64_t j = 0; j < dim; ++j) {
+                    centroid[j] += static_cast<double>(host_dataset[i * dim + j]);
+                }
+            }
+            for (int64_t j = 0; j < dim; ++j) {
+                centroid[j] /= num_vectors;
+            }
+
+            // Find the nearest point to centroid (using L2 distance)
+            uint32_t nearest_id = 0;
+            double min_dist = std::numeric_limits<double>::max();
+            for (int64_t i = 0; i < num_vectors; ++i) {
+                double dist = 0.0;
+                for (int64_t j = 0; j < dim; ++j) {
+                    double diff = centroid[j] - static_cast<double>(host_dataset[i * dim + j]);
+                    dist += diff * diff;
+                }
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    nearest_id = static_cast<uint32_t>(i);
+                }
+            }
+            return nearest_id;
+        }
+        return 0;
+    }
+
+    auto static deserialize(std::istream& is)
+        -> std::unique_ptr<typename cuvs_knowhere_index<index_kind, DataType>::impl> {
         auto static device_count = []() {
             auto result = 0;
             RAFT_CUDA_TRY(cudaGetDeviceCount(&result));
@@ -729,6 +957,18 @@ template <cuvs_proto::cuvs_index_kind IndexKind, typename DataType>
 void
 cuvs_knowhere_index<IndexKind, DataType>::serialize_to_hnswlib(std::ostream& os) const {
     return pimpl->serialize_to_hnswlib(os);
+}
+
+template <cuvs_proto::cuvs_index_kind IndexKind, typename DataType>
+void
+cuvs_knowhere_index<IndexKind, DataType>::serialize_graph_to_file(const std::string& filename) const {
+    return pimpl->serialize_graph_to_file(filename);
+}
+
+template <cuvs_proto::cuvs_index_kind IndexKind, typename DataType>
+void
+cuvs_knowhere_index<IndexKind, DataType>::serialize_graph_to_fbin_format(const std::string& filename) const {
+    return pimpl->serialize_graph_to_fbin_format(filename);
 }
 
 template <cuvs_proto::cuvs_index_kind IndexKind, typename DataType>

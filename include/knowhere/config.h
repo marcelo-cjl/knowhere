@@ -646,6 +646,7 @@ class BaseConfig : public Config {
     CFG_FLOAT retrieval_ann_ratio;
     CFG_STRING emb_list_meta_file_path;    // for mmap
     CFG_STRING emb_list_offset_file_path;  // for build
+    CFG_BOOL enable_export;                // enable export index to file (only for local test)
     KNOHWERE_DECLARE_CONFIG(BaseConfig) {
         KNOWHERE_CONFIG_DECLARE_FIELD(dim).allow_empty_without_default().description("vector dim").for_train();
         KNOWHERE_CONFIG_DECLARE_FIELD(metric_type)
@@ -822,6 +823,11 @@ class BaseConfig : public Config {
             .description("file name of emb_list offsets for build")
             .allow_empty_without_default()
             .for_train();
+        KNOWHERE_CONFIG_DECLARE_FIELD(enable_export)
+            .description("enable export index to file (only for local test)")
+            .set_default(false)
+            .for_deserialize()
+            .for_deserialize_from_file();
     }
 };
 }  // namespace knowhere

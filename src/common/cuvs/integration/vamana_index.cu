@@ -14,8 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "common/cuvs/integration/cuvs_knowhere_index.cuh"
+#include "common/cuvs/proto/cuvs_index_kind.hpp"
 
-namespace cuvs_proto {
-enum struct cuvs_index_kind { brute_force, ivf_flat, ivf_pq, cagra, vamana };
-}  // namespace cuvs_proto
+namespace cuvs_knowhere {
+// Vamana only supports float, int8_t in cuVS. fp16 is not supported by cuVS vamana.
+template struct cuvs_knowhere_index<cuvs_proto::cuvs_index_kind::vamana, knowhere::fp32>;
+template struct cuvs_knowhere_index<cuvs_proto::cuvs_index_kind::vamana, knowhere::int8>;
+}  // namespace cuvs_knowhere

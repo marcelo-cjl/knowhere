@@ -46,13 +46,16 @@ constexpr const char* INDEX_CUVS_BRUTEFORCE = "GPU_CUVS_BRUTE_FORCE";
 constexpr const char* INDEX_CUVS_IVFFLAT = "GPU_CUVS_IVF_FLAT";
 constexpr const char* INDEX_CUVS_IVFPQ = "GPU_CUVS_IVF_PQ";
 constexpr const char* INDEX_CUVS_CAGRA = "GPU_CUVS_CAGRA";
+constexpr const char* INDEX_CUVS_VAMANA = "GPU_CUVS_VAMANA";
 
 constexpr const char* INDEX_GPU_BRUTEFORCE = "GPU_BRUTE_FORCE";
 constexpr const char* INDEX_GPU_IVFFLAT = "GPU_IVF_FLAT";
 constexpr const char* INDEX_GPU_IVFPQ = "GPU_IVF_PQ";
 constexpr const char* INDEX_GPU_CAGRA = "GPU_CAGRA";
+constexpr const char* INDEX_GPU_VAMANA = "GPU_VAMANA";
 
 constexpr const char* INDEX_HNSW = "HNSW";
+constexpr const char* INDEX_HNSWLIB = "HNSWLIB_DEPRECATED";
 constexpr const char* INDEX_HNSW_SQ = "HNSW_SQ";
 constexpr const char* INDEX_HNSW_PQ = "HNSW_PQ";
 constexpr const char* INDEX_HNSW_PRQ = "HNSW_PRQ";
@@ -170,6 +173,17 @@ constexpr const char* HASHMAP_MIN_BITLEN = "hashmap_min_bitlen";
 constexpr const char* HASHMAP_MAX_FILL_RATE = "hashmap_max_fill_rate";
 constexpr const char* NN_DESCENT_NITER = "nn_descent_niter";
 constexpr const char* ADAPT_FOR_CPU = "adapt_for_cpu";
+
+// Vamana Params
+constexpr const char* VISITED_SIZE = "visited_size";
+constexpr const char* VAMANA_ITERS = "vamana_iters";
+constexpr const char* ALPHA = "alpha";
+constexpr const char* MAX_FRACTION = "max_fraction";
+constexpr const char* BATCH_BASE = "batch_base";
+constexpr const char* QUEUE_SIZE = "queue_size";
+
+// dataset params
+constexpr const char* DATASET_NAME = "dataset_name";
 
 // HNSW Params
 constexpr const char* EFCONSTRUCTION = "efConstruction";

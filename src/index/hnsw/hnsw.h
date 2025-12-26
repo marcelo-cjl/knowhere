@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <iomanip>
+#include <iostream>
 #include <new>
 #include <numeric>
 
@@ -190,6 +192,15 @@ class HnswIndexNode : public IndexNode {
                                << " #max level:" << index_->maxlevel_
                                << " #ef_construction:" << index_->ef_construction_
                                << " #dim:" << *(size_t*)(index_->space_->get_dist_func_param());
+            // Print average neighbors and pruning statistics for benchmark
+            float avg_neighbors = index_->getAverageNeighbors();
+            std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors
+                      << " new_node(cand=" << index_->getNewNodeAvgCandidates()
+                      << ",sel=" << index_->getNewNodeAvgSelected() << ")"
+                      << " bidir(cand=" << index_->getBidirAvgCandidates()
+                      << ",sel=" << index_->getBidirAvgSelected()
+                      << ",cnt=" << index_->getBidirCount() << ")"
+                      << std::endl;
         } catch (std::exception& e) {
             LOG_KNOWHERE_WARNING_ << "hnsw inner error: " << e.what();
             return Status::hnsw_inner_error;
@@ -487,7 +498,7 @@ class HnswIndexNode : public IndexNode {
     }
 
     Status
-    Deserialize(const BinarySet& binset, std::shared_ptr<Config>) override {
+    Deserialize(const BinarySet& binset, std::shared_ptr<Config> cfg) override {
         if (index_) {
             delete index_;
         }
@@ -502,7 +513,11 @@ class HnswIndexNode : public IndexNode {
 
             hnswlib::SpaceInterface<DistType>* space = nullptr;
             index_ = new (std::nothrow) hnswlib::HierarchicalNSW<DataType, DistType, quant_type>(space);
-            index_->loadIndex(reader);
+            if (cfg) {
+                index_->loadIndex(reader, *cfg);
+            } else {
+                index_->loadIndex(reader);
+            }
             LOG_KNOWHERE_INFO_ << "Loaded HNSW index. #points num:" << index_->max_elements_ << " #M:" << index_->M_
                                << " #max level:" << index_->maxlevel_
                                << " #ef_construction:" << index_->ef_construction_
@@ -566,7 +581,7 @@ class HnswIndexNode : public IndexNode {
 
     std::string
     Type() const override {
-        return knowhere::IndexEnum::INDEX_HNSW;
+        return knowhere::IndexEnum::INDEX_HNSWLIB;
     }
 
     ~HnswIndexNode() override {
