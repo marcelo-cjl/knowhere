@@ -61,6 +61,10 @@ struct cuvs_knowhere_index {
     serialize(std::ostream& os) const;
     void
     serialize_to_hnswlib(std::ostream& os) const;
+    void
+    serialize_graph_to_file(const std::string& filename) const;
+    void
+    serialize_graph_to_fbin_format(const std::string& filename) const;
     static cuvs_knowhere_index<IndexKind, DataType>
     deserialize(std::istream& is);
     void

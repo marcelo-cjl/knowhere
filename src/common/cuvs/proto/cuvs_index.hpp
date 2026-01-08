@@ -31,6 +31,7 @@
 #include <cuvs/neighbors/ivf_flat.hpp>
 #include <cuvs/neighbors/ivf_pq.hpp>
 #include <cuvs/neighbors/refine.hpp>
+#include <cuvs/neighbors/vamana.hpp>
 #include <istream>
 #include <optional>
 #include <ostream>
@@ -59,6 +60,9 @@ struct template_matches_index_kind<cuvs_index_kind::ivf_pq, cuvs::neighbors::ivf
 template <>
 struct template_matches_index_kind<cuvs_index_kind::cagra, cuvs::neighbors::cagra::index> : std::true_type {};
 
+template <>
+struct template_matches_index_kind<cuvs_index_kind::vamana, cuvs::neighbors::vamana::index> : std::true_type {};
+
 template <cuvs_index_kind index_kind, template <typename...> typename index_template>
 auto static constexpr template_matches_index_kind_v = template_matches_index_kind<index_kind, index_template>::value;
 
@@ -76,6 +80,8 @@ struct cuvs_index {
             return cuvs_index_kind::ivf_pq;
         } else if constexpr (detail::template_matches_index_kind_v<cuvs_index_kind::cagra, underlying_index_type>) {
             return cuvs_index_kind::cagra;
+        } else if constexpr (detail::template_matches_index_kind_v<cuvs_index_kind::vamana, underlying_index_type>) {
+            return cuvs_index_kind::vamana;
         } else {
             static_assert(detail::template_matches_index_kind_v<cuvs_index_kind::brute_force, underlying_index_type>,
                           "Unsupported index template passed to cuvs_index");
@@ -89,8 +95,10 @@ struct cuvs_index {
             std::conditional_t<
                 vector_index_kind == cuvs_index_kind::ivf_pq, cuvs::neighbors::ivf_pq::index_params,
                 std::conditional_t<vector_index_kind == cuvs_index_kind::cagra, cuvs::neighbors::cagra::index_params,
-                                   // Should never get here; precluded by static assertion above
-                                   cuvs::neighbors::index_params>>>>;
+                                   std::conditional_t<vector_index_kind == cuvs_index_kind::vamana,
+                                                      cuvs::neighbors::vamana::index_params,
+                                                      // Should never get here; precluded by static assertion above
+                                                      cuvs::neighbors::index_params>>>>>;
     using search_params_type = std::conditional_t<
         vector_index_kind == cuvs_index_kind::brute_force, cuvs::neighbors::brute_force::search_params,
         std::conditional_t<
@@ -98,8 +106,10 @@ struct cuvs_index {
             std::conditional_t<
                 vector_index_kind == cuvs_index_kind::ivf_pq, cuvs::neighbors::ivf_pq::search_params,
                 std::conditional_t<vector_index_kind == cuvs_index_kind::cagra, cuvs::neighbors::cagra::search_params,
-                                   // Should never get here; precluded by static assertion above
-                                   cuvs::neighbors::search_params>>>>;
+                                   std::conditional_t<vector_index_kind == cuvs_index_kind::vamana,
+                                                      cuvs::neighbors::cagra::search_params,
+                                                      // Should never get here; precluded by static assertion above
+                                                      cuvs::neighbors::search_params>>>>>;
 
     [[nodiscard]] auto&
     get_vector_index() {
@@ -127,6 +137,15 @@ struct cuvs_index {
             } else if constexpr (vector_index_kind == cuvs_index_kind::cagra) {
                 return cuvs_index<underlying_index_type, cuvs_index_args...>{
                     cuvs::neighbors::cagra::build(res, index_params, data)};
+            } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+                // Vamana only supports float, int8_t, uint8_t
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, int8_t> || std::is_same_v<T, uint8_t>) {
+                    return cuvs_index<underlying_index_type, cuvs_index_args...>{
+                        cuvs::neighbors::vamana::build(res, index_params, data)};
+                } else {
+                    static_assert(std::is_same_v<T, float> || std::is_same_v<T, int8_t> || std::is_same_v<T, uint8_t>,
+                                  "Vamana only supports float, int8_t, and uint8_t data types");
+                }
             } else if constexpr (vector_index_kind == cuvs_index_kind::ivf_pq) {
                 return cuvs_index<underlying_index_type, cuvs_index_args...>{
                     cuvs::neighbors::ivf_pq::build(res, index_params, data)};
@@ -147,6 +166,15 @@ struct cuvs_index {
             } else if constexpr (vector_index_kind == cuvs_index_kind::cagra) {
                 return cuvs_index<underlying_index_type, cuvs_index_args...>{
                     cuvs::neighbors::cagra::build(res, index_params, data)};
+            } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+                // Vamana only supports float, int8_t, uint8_t
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, int8_t> || std::is_same_v<T, uint8_t>) {
+                    return cuvs_index<underlying_index_type, cuvs_index_args...>{
+                        cuvs::neighbors::vamana::build(res, index_params, data)};
+                } else {
+                    static_assert(std::is_same_v<T, float> || std::is_same_v<T, int8_t> || std::is_same_v<T, uint8_t>,
+                                  "Vamana only supports float, int8_t, and uint8_t data types");
+                }
             }
         }
     }
@@ -203,6 +231,8 @@ struct cuvs_index {
         } else if constexpr (vector_index_kind == cuvs_index_kind::cagra) {
             cuvs::neighbors::cagra::search(res, search_params, underlying_index, queries, neighbors_tmp, distances_tmp,
                                            filter);
+        } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+            RAFT_FAIL("Vamana search is not yet supported in cuVS");
         }
         if constexpr (std::is_same_v<T, float>) {
             if (do_refine_step) {
@@ -244,6 +274,8 @@ struct cuvs_index {
             return cuvs_index{cuvs::neighbors::ivf_pq::extend(res, new_vectors, new_ids, underlying_index)};
         } else if constexpr (vector_index_kind == cuvs_index_kind::cagra) {
             RAFT_FAIL("CAGRA implements no extend method");
+        } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+            RAFT_FAIL("Vamana implements no extend method");
         }
     }
 
@@ -261,6 +293,29 @@ struct cuvs_index {
             return cuvs::neighbors::ivf_pq::serialize(res, os, underlying_index);
         } else if constexpr (vector_index_kind == cuvs_index_kind::cagra) {
             return cuvs::neighbors::cagra::serialize(res, os, underlying_index, include_dataset);
+        } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+            // Manually serialize vamana index since cuVS doesn't support ostream serialization
+            // Format: [metric_type, dim, medoid_id, num_nodes, graph_degree, graph_data...]
+            auto metric = static_cast<int>(underlying_index.metric());
+            raft::serialize_scalar(res, os, metric);
+
+            auto dim = static_cast<int64_t>(underlying_index.dim());
+            raft::serialize_scalar(res, os, dim);
+
+            auto medoid_id = underlying_index.medoid();
+            raft::serialize_scalar(res, os, medoid_id);
+
+            auto graph_view = underlying_index.graph();
+            int64_t num_nodes = graph_view.extent(0);
+            int64_t graph_degree = graph_view.extent(1);
+            raft::serialize_scalar(res, os, num_nodes);
+            raft::serialize_scalar(res, os, graph_degree);
+
+            // Copy graph from device to host and write to stream
+            auto host_graph = raft::make_host_matrix<IdxT, int64_t>(num_nodes, graph_degree);
+            raft::copy(res, host_graph.view(), graph_view);
+            raft::resource::sync_stream(res);
+            raft::serialize_mdspan(res, os, host_graph.view());
         }
     }
 
@@ -306,6 +361,34 @@ struct cuvs_index {
             cuvs::neighbors::cagra::index<T, IdxT> loaded_index(res);
             cuvs::neighbors::cagra::deserialize(res, is, &loaded_index);
             return cuvs_index{std::forward<decltype(loaded_index)>(loaded_index)};
+        } else if constexpr (vector_index_kind == cuvs_index_kind::vamana) {
+            // Manually deserialize vamana index
+            // Format: [metric_type, dim, medoid_id, num_nodes, graph_degree, graph_data...]
+            auto metric_int = raft::deserialize_scalar<int>(res, is);
+            auto metric = static_cast<cuvs::distance::DistanceType>(metric_int);
+
+            auto dim = raft::deserialize_scalar<int64_t>(res, is);
+            auto medoid_id = raft::deserialize_scalar<IdxT>(res, is);
+
+            auto num_nodes = raft::deserialize_scalar<int64_t>(res, is);
+            auto graph_degree = raft::deserialize_scalar<int64_t>(res, is);
+
+            // Read graph data
+            auto host_graph = raft::make_host_matrix<IdxT, int64_t>(num_nodes, graph_degree);
+            raft::deserialize_mdspan(res, is, host_graph.view());
+
+            // Create a dummy host dataset with correct dimensions (num_nodes x dim)
+            // This is needed because vamana::index::dim() reads from dataset
+            auto host_dataset = raft::make_host_matrix<T, int64_t>(num_nodes, dim);
+            // Initialize to zeros (we don't need actual data, just the shape)
+            std::memset(host_dataset.data_handle(), 0, num_nodes * dim * sizeof(T));
+
+            // Create index with dataset and graph
+            cuvs::neighbors::vamana::index<T, IdxT> loaded_index(res, metric,
+                                                                 raft::make_const_mdspan(host_dataset.view()),
+                                                                 raft::make_const_mdspan(host_graph.view()), medoid_id);
+
+            return cuvs_index{std::move(loaded_index)};
         }
     }
 

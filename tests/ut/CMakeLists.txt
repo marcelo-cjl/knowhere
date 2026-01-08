@@ -29,7 +29,17 @@ else()
   list(REMOVE_ITEM KNOWHERE_UT_SRCS ${KNOWHERE_CLUSTER_TESTS})
 endif()
 
+# Exclude benchmark_main.cc from tests (has own main function)
+knowhere_file_glob(GLOB_RECURSE KNOWHERE_BENCHMARK_MAIN benchmark_main.cc)
+list(REMOVE_ITEM KNOWHERE_UT_SRCS ${KNOWHERE_BENCHMARK_MAIN})
+
 add_executable(knowhere_tests ${KNOWHERE_UT_SRCS})
+
+# Standalone benchmark program
+add_executable(knowhere_benchmark benchmark_main.cc ${CMAKE_SOURCE_DIR}/src/common/comp/brute_force.cc)
+set_target_properties(knowhere_benchmark PROPERTIES CXX_STANDARD 17)
+target_include_directories(knowhere_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(knowhere_benchmark PRIVATE atomic stdc++fs knowhere)
 
 find_package(Catch2)
 if (NOT Catch2_FOUND)

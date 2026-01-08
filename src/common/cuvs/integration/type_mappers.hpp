@@ -60,6 +60,12 @@ struct cuvs_io_type_mapper<true, cuvs_proto::cuvs_index_kind::cagra> : std::true
     using indexing_type = std::uint32_t;
     using input_indexing_type = std::int64_t;
 };
+
+template <>
+struct cuvs_io_type_mapper<true, cuvs_proto::cuvs_index_kind::vamana> : std::true_type {
+    using indexing_type = std::uint32_t;
+    using input_indexing_type = std::int64_t;
+};
 }  // namespace detail
 
 template <cuvs_proto::cuvs_index_kind IndexKind>

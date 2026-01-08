@@ -24,6 +24,7 @@
 #include <numeric>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include "common/cuvs/integration/cuvs_knowhere_config.hpp"
@@ -34,6 +35,7 @@
 #include "index/gpu_cuvs/gpu_cuvs_cagra_config.h"
 #include "index/gpu_cuvs/gpu_cuvs_ivf_flat_config.h"
 #include "index/gpu_cuvs/gpu_cuvs_ivf_pq_config.h"
+#include "index/gpu_cuvs/gpu_cuvs_vamana_config.h"
 #include "knowhere/comp/index_param.h"
 #include "knowhere/expected.h"
 #include "knowhere/index/index_factory.h"
@@ -65,6 +67,11 @@ struct KnowhereConfigType<cuvs_proto::cuvs_index_kind::ivf_pq> {
 template <>
 struct KnowhereConfigType<cuvs_proto::cuvs_index_kind::cagra> {
     using Type = GpuCuvsCagraConfig;
+};
+
+template <>
+struct KnowhereConfigType<cuvs_proto::cuvs_index_kind::vamana> {
+    using Type = GpuCuvsVamanaConfig;
 };
 
 template <typename DataType, cuvs_proto::cuvs_index_kind K>
@@ -184,7 +191,7 @@ struct GpuCuvsIndexNode : public IndexNode {
     }
 
     Status
-    Deserialize(const BinarySet& binset, std::shared_ptr<Config>) override {
+    Deserialize(const BinarySet& binset, std::shared_ptr<Config> cfg) override {
         auto result = Status::success;
         std::stringbuf buf;
         auto binary = binset.GetByName(this->Type());
@@ -196,7 +203,51 @@ struct GpuCuvsIndexNode : public IndexNode {
             std::istream is(&buf);
             result = DeserializeFromStream(is);
         }
+
+        // export graph if enabled (for CAGRA and Vamana)
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+            if (result == Status::success && cfg) {
+                auto base_cfg = static_cast<const knowhere::BaseConfig&>(*cfg);
+                if (base_cfg.enable_export.has_value() && base_cfg.enable_export.value() &&
+                    base_cfg.index_prefix.has_value()) {
+                    ExportCagraGraph(base_cfg.index_prefix.value());
+                }
+            }
+        }
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+            if (result == Status::success && cfg) {
+                auto base_cfg = static_cast<const knowhere::BaseConfig&>(*cfg);
+                if (base_cfg.enable_export.has_value() && base_cfg.enable_export.value() &&
+                    base_cfg.index_prefix.has_value()) {
+                    ExportVamanaGraph(base_cfg.index_prefix.value());
+                }
+            }
+        }
         return result;
+    }
+
+    void
+    ExportCagraGraph(const std::string& index_prefix) {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
+            try {
+                std::string filename = index_prefix + ".graph";
+                index_.serialize_graph_to_fbin_format(filename);
+            } catch (const std::exception& e) {
+                LOG_KNOWHERE_WARNING_ << "Failed to export CAGRA graph: " << e.what();
+            }
+        }
+    }
+
+    void
+    ExportVamanaGraph(const std::string& index_prefix) {
+        if constexpr (index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+            try {
+                std::string filename = index_prefix + ".graph";
+                index_.serialize_graph_to_fbin_format(filename);
+            } catch (const std::exception& e) {
+                LOG_KNOWHERE_WARNING_ << "Failed to export Vamana graph: " << e.what();
+            }
+        }
     }
 
     Status
@@ -244,6 +295,8 @@ struct GpuCuvsIndexNode : public IndexNode {
             return knowhere::IndexEnum::INDEX_CUVS_IVFPQ;
         } else if constexpr (index_kind == cuvs_proto::cuvs_index_kind::cagra) {
             return knowhere::IndexEnum::INDEX_CUVS_CAGRA;
+        } else if constexpr (index_kind == cuvs_proto::cuvs_index_kind::vamana) {
+            return knowhere::IndexEnum::INDEX_CUVS_VAMANA;
         }
     }
 
@@ -275,6 +328,8 @@ template <typename DataType>
 using GpuCuvsIvfPqIndexNode = GpuCuvsIndexNode<DataType, cuvs_proto::cuvs_index_kind::ivf_pq>;
 template <typename DataType>
 using GpuCuvsCagraIndexNode = GpuCuvsIndexNode<DataType, cuvs_proto::cuvs_index_kind::cagra>;
+template <typename DataType>
+using GpuCuvsVamanaIndexNode = GpuCuvsIndexNode<DataType, cuvs_proto::cuvs_index_kind::vamana>;
 
 }  // namespace knowhere
 

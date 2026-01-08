@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -167,6 +169,141 @@ is_faiss_fourcc_error(const char* what) {
            (error_msg.find("not recognized") != std::string::npos);
 }
 
+// Helper function to print HNSW index statistics (average neighbors at level 0)
+static void
+PrintHnswIndexStats(const std::vector<std::shared_ptr<faiss::Index>>& indexes) {
+    for (size_t idx = 0; idx < indexes.size(); ++idx) {
+        const auto& index = indexes[idx];
+        if (index == nullptr) {
+            continue;
+        }
+
+        // Try to get IndexHNSW from the index (could be wrapped in IndexRefine, etc.)
+        const faiss::IndexHNSW* hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(index.get());
+
+        // Check if it's wrapped in IndexRefine
+        if (hnsw_index == nullptr) {
+            const faiss::IndexRefine* refine_index = dynamic_cast<const faiss::IndexRefine*>(index.get());
+            if (refine_index != nullptr) {
+                hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(refine_index->base_index);
+            }
+        }
+
+        if (hnsw_index == nullptr || hnsw_index->hnsw.levels.empty()) {
+            continue;
+        }
+
+        const faiss::HNSW& hnsw = hnsw_index->hnsw;
+        int64_t ntotal = hnsw_index->ntotal;
+        if (ntotal == 0) {
+            continue;
+        }
+
+        // Calculate average neighbors at level 0
+        size_t total_neighbors = 0;
+        int nb_neighbors_level0 = hnsw.nb_neighbors(0);  // max neighbors at level 0
+
+        for (int64_t i = 0; i < ntotal; ++i) {
+            size_t begin, end;
+            hnsw.neighbor_range(i, 0, &begin, &end);
+            // Count actual (non -1) neighbors
+            size_t count = 0;
+            for (size_t j = begin; j < end; ++j) {
+                if (hnsw.neighbors[j] >= 0) {
+                    count++;
+                }
+            }
+            total_neighbors += count;
+        }
+
+        float avg_neighbors = static_cast<float>(total_neighbors) / ntotal;
+        std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors
+                  << " (max_neighbors_level0=" << nb_neighbors_level0 << ", ntotal=" << ntotal << ")" << std::endl;
+    }
+}
+
+// Helper function to export HNSW graph to CSR format (similar to hnswlib's exportGraph)
+static void
+ExportHnswGraph(const std::vector<std::shared_ptr<faiss::Index>>& indexes, const std::string& index_prefix) {
+    for (size_t idx = 0; idx < indexes.size(); ++idx) {
+        const auto& index = indexes[idx];
+        if (index == nullptr) {
+            continue;
+        }
+
+        // Try to get IndexHNSW from the index (could be wrapped in IndexRefine, etc.)
+        const faiss::IndexHNSW* hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(index.get());
+
+        // Check if it's wrapped in IndexRefine
+        if (hnsw_index == nullptr) {
+            const faiss::IndexRefine* refine_index = dynamic_cast<const faiss::IndexRefine*>(index.get());
+            if (refine_index != nullptr) {
+                hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(refine_index->base_index);
+            }
+        }
+
+        if (hnsw_index == nullptr || hnsw_index->hnsw.levels.empty()) {
+            LOG_KNOWHERE_WARNING_ << "Cannot export graph: index " << idx << " is not a valid HNSW index";
+            continue;
+        }
+
+        const faiss::HNSW& hnsw = hnsw_index->hnsw;
+        uint32_t num_vertices = static_cast<uint32_t>(hnsw_index->ntotal);
+        if (num_vertices == 0) {
+            LOG_KNOWHERE_WARNING_ << "Cannot export graph: index " << idx << " is empty";
+            continue;
+        }
+
+        // Get entry point
+        uint32_t entry_point = static_cast<uint32_t>(hnsw.entry_point);
+
+        // Build CSR format: collect all valid neighbors at level 0
+        std::vector<uint32_t> indices(num_vertices + 1, 0);
+        std::vector<int32_t> neighbors;
+        neighbors.reserve(num_vertices * hnsw.nb_neighbors(0));
+
+        indices[0] = 0;
+        for (uint32_t u = 0; u < num_vertices; ++u) {
+            size_t begin, end;
+            hnsw.neighbor_range(u, 0, &begin, &end);
+            // Count actual (non -1) neighbors
+            for (size_t j = begin; j < end; ++j) {
+                if (hnsw.neighbors[j] >= 0) {
+                    neighbors.push_back(static_cast<int32_t>(hnsw.neighbors[j]));
+                }
+            }
+            indices[u + 1] = static_cast<uint32_t>(neighbors.size());
+        }
+
+        // Generate filename (with index suffix if multiple indexes)
+        std::string filename = index_prefix + ".graph";
+        if (indexes.size() > 1) {
+            filename = index_prefix + "_" + std::to_string(idx) + ".graph";
+        }
+
+        // Write graph to file in CSR format
+        std::ofstream graph_file(filename, std::ios::binary);
+        if (!graph_file) {
+            LOG_KNOWHERE_WARNING_ << "Failed to open file for writing: " << filename;
+            continue;
+        }
+
+        // Write header: [num_vertices (uint32), entry_point (uint32)]
+        graph_file.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+        graph_file.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+        // Write CSR indices
+        graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+
+        // Write neighbors
+        graph_file.write(reinterpret_cast<const char*>(neighbors.data()), neighbors.size() * sizeof(int32_t));
+
+        graph_file.close();
+        LOG_KNOWHERE_INFO_ << "Exported HNSW graph to " << filename << " (vertices=" << num_vertices
+                           << ", edges=" << neighbors.size() << ", entry_point=" << entry_point << ")";
+    }
+}
+
 //
 class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
  public:
@@ -243,6 +380,17 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
             }
         }
 
+        // Print HNSW index statistics
+        PrintHnswIndexStats(indexes);
+
+        // Export graph if enabled
+        if (config) {
+            auto cfg = static_cast<const knowhere::BaseConfig&>(*config);
+            if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+                ExportHnswGraph(indexes, cfg.index_prefix.value());
+            }
+        }
+
         return Status::success;
     }
 
@@ -292,6 +440,14 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
                 LOG_KNOWHERE_WARNING_ << "faiss inner error: " << e.what();
                 return Status::faiss_inner_error;
             }
+        }
+
+        // Print HNSW index statistics
+        PrintHnswIndexStats(indexes);
+
+        // Export graph if enabled
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            ExportHnswGraph(indexes, cfg.index_prefix.value());
         }
 
         return Status::success;
