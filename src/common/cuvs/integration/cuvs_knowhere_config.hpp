@@ -34,6 +34,7 @@ struct cuvs_knowhere_config {
     bool add_data_on_build = true;
     bool cache_dataset_on_device = false;
     float refine_ratio = 1.0f;
+    std::optional<std::string> dataset_name = std::nullopt;  // For graph serialization
 
     // Shared IVF Parameters
     std::optional<int> nlist = std::nullopt;
@@ -71,6 +72,14 @@ struct cuvs_knowhere_config {
     std::optional<float> hashmap_max_fill_rate = std::nullopt;
     std::optional<int> nn_descent_niter = std::nullopt;
     std::optional<bool> persistent = std::nullopt;
+
+    // VAMANA Parameters
+    std::optional<int> visited_size = std::nullopt;
+    std::optional<float> vamana_iters = std::nullopt;
+    std::optional<float> alpha = std::nullopt;
+    std::optional<float> max_fraction = std::nullopt;
+    std::optional<float> batch_base = std::nullopt;
+    std::optional<int> queue_size = std::nullopt;
 };
 
 // The following function provides a single source of truth for default values
@@ -120,6 +129,15 @@ validate_cuvs_knowhere_config(cuvs_knowhere_config config) {
         config.hashmap_max_fill_rate = config.hashmap_max_fill_rate.value_or(0.5f);
         config.nn_descent_niter = config.nn_descent_niter.value_or(20);
         config.persistent = config.persistent.value_or(false);
+    }
+    if (config.index_type == cuvs_proto::cuvs_index_kind::vamana) {
+        config.graph_degree = config.graph_degree.value_or(32);
+        config.visited_size = config.visited_size.value_or(64);
+        config.vamana_iters = config.vamana_iters.value_or(1.0f);
+        config.alpha = config.alpha.value_or(1.2f);
+        config.max_fraction = config.max_fraction.value_or(0.06f);
+        config.batch_base = config.batch_base.value_or(2.0f);
+        config.queue_size = config.queue_size.value_or(127);
     }
     return config;
 }

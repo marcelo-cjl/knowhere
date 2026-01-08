@@ -3,7 +3,11 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <stdexcept>
 
 #include "io/file_io.h"
@@ -25,9 +29,10 @@
 #include <unordered_set>
 
 #ifdef KNOWHERE_WITH_CUVS
+#include <cuvs/distance/distance.hpp>
 #include <raft/core/detail/mdspan_numpy_serializer.hpp>
 #include <raft/neighbors/detail/cagra/cagra_serialize.cuh>
-#include <cuvs/distance/distance.hpp>
+
 #include "common/cuvs/integration/type_mappers.hpp"
 #endif
 
@@ -426,6 +431,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     mutable std::atomic<long> metric_distance_computations;
     mutable std::atomic<long> metric_hops;
 
+    // Pruning statistics (for level 0 only)
+    // New node pruning: when selecting neighbors for the newly added node
+    mutable std::atomic<long> new_node_candidates_{0};
+    mutable std::atomic<long> new_node_selected_{0};
+    mutable std::atomic<long> new_node_count_{0};
+    // Bidirectional pruning: when updating existing neighbor's list (list is full)
+    mutable std::atomic<long> bidir_candidates_{0};
+    mutable std::atomic<long> bidir_selected_{0};
+    mutable std::atomic<long> bidir_count_{0};
+
     template <typename AddSearchCandidate, bool has_deletions, bool collect_metrics = false>
     inline void
     searchBaseLayerSTNext(const void* data_point, Neighbor next, std::vector<bool>& visited, float& accumulative_alpha,
@@ -630,7 +645,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                               int level, bool isUpdate) {
         size_t Mcurmax = level ? maxM_ : maxM0_;
 
+        // Track new node pruning statistics for level 0
+        size_t candidates_before = top_candidates.size();
         std::vector<tableint> selectedNeighbors(getNeighborsByHeuristic2(top_candidates, M_));
+        if (level == 0) {
+            new_node_candidates_ += candidates_before;
+            new_node_selected_ += selectedNeighbors.size();
+            new_node_count_++;
+        }
+
         if (selectedNeighbors.size() > M_)
             throw std::runtime_error("Should be not be more than M_ candidates returned by the heuristic");
 
@@ -707,7 +730,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         candidates.emplace(dist, data[j]);
                     }
 
+                    size_t bidir_cand_count = candidates.size();  // sz_link_list_other + 1
                     std::vector<tableint> selected(getNeighborsByHeuristic2(candidates, Mcurmax));
+                    // Track bidirectional pruning statistics for level 0
+                    if (level == 0) {
+                        bidir_candidates_ += bidir_cand_count;
+                        bidir_selected_ += selected.size();
+                        bidir_count_++;
+                    }
                     setListCount(ll_other, static_cast<unsigned short int>(selected.size()));
                     for (size_t i = 0; i < selected.size(); i++) {
                         data[i] = selected[i];
@@ -899,6 +929,37 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 input.read(linkLists_[i], linkListSize);
             }
         }
+
+        // export graph if enabled
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            exportGraph(cfg.index_prefix.value());
+        }
+    }
+
+    void
+    exportGraph(const std::string& index_prefix) {
+        std::ofstream graph_file(index_prefix + ".graph", std::ios::binary);
+        uint32_t num_vertices = static_cast<uint32_t>(cur_element_count);
+        uint32_t entry_point = static_cast<uint32_t>(enterpoint_node_);
+        graph_file.write(reinterpret_cast<const char*>(&num_vertices), sizeof(uint32_t));
+        graph_file.write(reinterpret_cast<const char*>(&entry_point), sizeof(uint32_t));
+
+        std::vector<uint32_t> indices(num_vertices + 1, 0);
+        graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+        indices[0] = 0;
+
+        for (uint32_t u = 0; u < num_vertices; ++u) {
+            linklistsizeint* ll = get_linklist0(u);
+            unsigned short int size = getListCount(ll);
+            tableint* neighbors = (tableint*)(ll + 1);
+            indices[u + 1] = indices[u] + size;
+            graph_file.write(reinterpret_cast<const char*>(neighbors), size * sizeof(tableint));
+        }
+
+        // re-write the indices to the beginning of the file
+        graph_file.seekp(sizeof(uint32_t) + sizeof(uint32_t));
+        graph_file.write(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint32_t));
+        graph_file.close();
     }
 
     void
@@ -1044,22 +1105,37 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 input.read(linkLists_[i], linkListSize);
             }
         }
+
+        // Calculate and print average neighbors
+        float avg_neighbors = getAverageNeighbors();
+        std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors << std::endl;
+    }
+
+    void
+    loadIndex(knowhere::MemoryIOReader& input, const knowhere::Config& config, size_t max_elements_i = 0) {
+        loadIndex(input, max_elements_i);
+
+        // export graph if enabled
+        auto cfg = static_cast<const knowhere::BaseConfig&>(config);
+        if (cfg.enable_export.has_value() && cfg.enable_export.value() && cfg.index_prefix.has_value()) {
+            exportGraph(cfg.index_prefix.value());
+        }
     }
 
 #ifdef KNOWHERE_WITH_CUVS
     void
     loadIndexFromGpuFormat(std::istream& input, size_t max_elements_i = 0) {
         using idxt = cuvs_knowhere::cuvs_indexing_t<cuvs_proto::cuvs_index_kind::cagra>;
-        
+
         char dtype_string[4];
         input.read(dtype_string, 4);
         auto ver = raft::detail::numpy_serializer::deserialize_scalar<int>(input);
         if (ver != raft::neighbors::cagra::detail::serialization_version) {
-            throw std::runtime_error("serialization version mismatch, expected " + 
-                                std::to_string(raft::neighbors::cagra::detail::serialization_version) +
-                                ", got " + std::to_string(ver));
+            throw std::runtime_error("serialization version mismatch, expected " +
+                                     std::to_string(raft::neighbors::cagra::detail::serialization_version) + ", got " +
+                                     std::to_string(ver));
         }
-        
+
         auto n_rows = raft::detail::numpy_serializer::deserialize_scalar<idxt>(input);
         auto dim = raft::detail::numpy_serializer::deserialize_scalar<std::uint32_t>(input);
         auto graph_degree = raft::detail::numpy_serializer::deserialize_scalar<std::uint32_t>(input);
@@ -1108,7 +1184,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         max_elements_ = max_elements;
 
-        size_data_per_element_ = static_cast<std::size_t>(graph_degree * sizeof(idxt) + 4 + (n_rows > 0 ? dim * sizeof(data_t) : 0) + 8);
+        size_data_per_element_ =
+            static_cast<std::size_t>(graph_degree * sizeof(idxt) + 4 + (n_rows > 0 ? dim * sizeof(data_t) : 0) + 8);
         label_offset_ = size_data_per_element_ - 8;
         offsetData_ = graph_degree * sizeof(idxt) + 4;
         maxlevel_ = 1;
@@ -1118,11 +1195,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         M_ = graph_degree / 2;
         mult_ = 0.42424242;
         ef_construction_ = 500;
-        
+
         data_level0_memory_ = (char*)malloc(max_elements * size_data_per_element_);  // NOLINT
         if (data_level0_memory_ == nullptr)
             throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
-        
+
         [[maybe_unused]] auto header = raft::detail::numpy_serializer::read_header(input);
         for (size_t i = 0; i < max_elements; i++) {
             auto offset = i * size_data_per_element_;
@@ -1132,11 +1209,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         auto include_dataset = raft::detail::numpy_serializer::deserialize_scalar<bool>(input);
         if (include_dataset) {
-            constexpr uint32_t kSerializeEmptyDataset   = 1;
+            constexpr uint32_t kSerializeEmptyDataset = 1;
             if (kSerializeEmptyDataset == raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input)) {
-                [[maybe_unused]] auto suggested_dim = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
+                [[maybe_unused]] auto suggested_dim =
+                    raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
             } else {
-                [[maybe_unused]] auto data_type = raft::detail::numpy_serializer::deserialize_scalar<cudaDataType_t>(input);
+                [[maybe_unused]] auto data_type =
+                    raft::detail::numpy_serializer::deserialize_scalar<cudaDataType_t>(input);
                 [[maybe_unused]] auto n_rows = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
                 auto dim = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
                 [[maybe_unused]] auto stride = raft::detail::numpy_serializer::deserialize_scalar<uint32_t>(input);
@@ -1148,7 +1227,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             }
         }
         for (size_t i = 0; i < max_elements; i++) {
-            auto offset = i * size_data_per_element_ + sizeof(int) + graph_degree * sizeof(idxt) + (n_rows > 0 ? dim * sizeof(data_t) : 0);
+            auto offset = i * size_data_per_element_ + sizeof(int) + graph_degree * sizeof(idxt) +
+                          (n_rows > 0 ? dim * sizeof(data_t) : 0);
             memcpy(data_level0_memory_ + offset, &i, sizeof(size_t));
         }
 
@@ -1165,6 +1245,142 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         revSize_ = 1.0 / mult_;
         ef_ = 10;
 
+        // Calculate and print average neighbors
+        float avg_neighbors = getAverageNeighbors();
+        std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors << std::endl;
+
+        input.sync();
+    }
+
+    void
+    loadIndexFromVamanaGpuFormat(std::istream& input, size_t max_elements_i = 0) {
+        using idxt = cuvs_knowhere::cuvs_indexing_t<cuvs_proto::cuvs_index_kind::vamana>;
+
+        // Read Vamana format - raft::serialize_scalar uses NumPy format
+        // [metric_type(int), dim(int64), medoid_id(idxt), num_nodes(int64), graph_degree(int64), graph_data(mdspan),
+        //  has_dataset(bool), [dataset_rows(int64), dataset_cols(int64), dataset(mdspan)]]
+        int metric_int = raft::detail::numpy_serializer::deserialize_scalar<int>(input);
+        auto metric = static_cast<cuvs::distance::DistanceType>(metric_int);
+
+        int64_t dim = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
+
+        idxt medoid_id = raft::detail::numpy_serializer::deserialize_scalar<idxt>(input);
+
+        int64_t n_rows = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
+
+        int64_t graph_degree = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
+
+        if (metric == cuvs::distance::DistanceType::L2Expanded) {
+            metric_type_ = Metric::L2;
+        } else if (metric == cuvs::distance::DistanceType::InnerProduct) {
+            metric_type_ = Metric::INNER_PRODUCT;
+        } else if (metric == cuvs::distance::DistanceType::CosineExpanded) {
+            metric_type_ = Metric::COSINE;
+        } else {
+            metric_type_ = Metric::UNKNOWN;
+        }
+
+        if constexpr (knowhere::KnowhereFloatTypeCheck<data_t>::value) {
+            if (metric_type_ == Metric::L2) {
+                space_ = new hnswlib::L2Space<data_t, dist_t>(dim);
+            } else if (metric_type_ == Metric::INNER_PRODUCT) {
+                space_ = new hnswlib::InnerProductSpace<data_t, dist_t>(dim);
+            } else if (metric_type_ == Metric::COSINE) {
+                space_ = new hnswlib::CosineSpace<data_t, dist_t>(dim);
+            } else {
+                throw std::runtime_error("Invalid metric type for float data type:" + std::to_string(metric_type_));
+            }
+        } else {
+            throw std::runtime_error("Vamana only supports float data types");
+        }
+
+        data_size_ = dim * sizeof(float);
+        fstdistfunc_ = space_->get_dist_func();
+        dist_func_param_ = space_->get_dist_func_param();
+        offsetLevel0_ = 0;
+        max_elements_ = n_rows;
+        cur_element_count = n_rows;
+        size_t max_elements = max_elements_i;
+        if (max_elements < cur_element_count) {
+            max_elements = max_elements_;
+        }
+        max_elements_ = max_elements;
+
+        // Use same layout as CAGRA: [link_count(4), neighbors(graph_degree * sizeof(idxt)), data, label(8)]
+        // Note: idxt and tableint should both be uint32_t
+        size_data_per_element_ = static_cast<std::size_t>(graph_degree * sizeof(idxt) + 4 + data_size_ + 8);
+        label_offset_ = size_data_per_element_ - 8;
+        offsetData_ = graph_degree * sizeof(idxt) + 4;
+        maxlevel_ = 1;
+        enterpoint_node_ = medoid_id;  // Use medoid as entry point
+        maxM_ = graph_degree / 2;
+        maxM0_ = graph_degree;
+        M_ = graph_degree / 2;
+        mult_ = 0.42424242;
+        ef_construction_ = 500;
+
+        data_level0_memory_ = (char*)malloc(max_elements * size_data_per_element_);
+        if (data_level0_memory_ == nullptr)
+            throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
+
+        // Read graph data (raft::serialize_mdspan uses numpy format)
+        [[maybe_unused]] auto graph_header = raft::detail::numpy_serializer::read_header(input);
+        std::vector<idxt> temp_row(graph_degree);
+        for (size_t i = 0; i < max_elements; i++) {
+            // Read graph row
+            input.read(reinterpret_cast<char*>(temp_row.data()), graph_degree * sizeof(idxt));
+
+            // Count valid neighbors and compact them
+            int valid_count = 0;
+            for (int64_t j = 0; j < graph_degree; j++) {
+                if (temp_row[j] < static_cast<idxt>(n_rows)) {
+                    temp_row[valid_count++] = temp_row[j];
+                }
+            }
+
+            // Write to level0 memory: link_count + valid neighbors
+            auto offset = i * size_data_per_element_;
+            memcpy(data_level0_memory_ + offset, &valid_count, sizeof(int));
+            offset += sizeof(int);
+            memcpy(data_level0_memory_ + offset, temp_row.data(), valid_count * sizeof(idxt));
+        }
+
+        // Read dataset if present
+        bool has_dataset = raft::detail::numpy_serializer::deserialize_scalar<bool>(input);
+        if (has_dataset) {
+            int64_t dataset_rows = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
+            int64_t dataset_cols = raft::detail::numpy_serializer::deserialize_scalar<int64_t>(input);
+            // Read numpy header for dataset
+            [[maybe_unused]] auto dataset_header = raft::detail::numpy_serializer::read_header(input);
+            // Read dataset row by row into data section
+            for (size_t i = 0; i < max_elements && i < static_cast<size_t>(dataset_rows); i++) {
+                auto data_offset = i * size_data_per_element_ + offsetData_;
+                input.read(data_level0_memory_ + data_offset, dataset_cols * sizeof(float));
+            }
+        }
+
+        // Set labels
+        for (size_t i = 0; i < max_elements; i++) {
+            auto offset = i * size_data_per_element_ + sizeof(int) + graph_degree * sizeof(idxt) + data_size_;
+            memcpy(data_level0_memory_ + offset, &i, sizeof(size_t));
+        }
+
+        size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+        size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+
+        visited_list_pool_ = new VisitedListPool(max_elements);
+
+        linkLists_ = (char**)malloc(sizeof(void*) * max_elements);
+        if (linkLists_ == nullptr)
+            throw std::runtime_error("Not enough memory: loadIndex failed to allocate linklists");
+        element_levels_ = std::vector<int>(max_elements);
+        revSize_ = 1.0 / mult_;
+        ef_ = 10;
+
+        // Calculate and print average neighbors
+        float avg_neighbors = getAverageNeighbors();
+        std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors << std::endl;
+
         input.sync();
     }
 #endif
@@ -1177,6 +1393,39 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     void
     setListCount(linklistsizeint* ptr, unsigned short int size) const {
         *((unsigned short int*)(ptr)) = *((unsigned short int*)&size);
+    }
+
+    // Calculate average neighbors at level 0
+    float
+    getAverageNeighbors() const {
+        if (cur_element_count == 0) return 0.0f;
+        size_t total_neighbors = 0;
+        for (size_t i = 0; i < cur_element_count; i++) {
+            char* ptr = data_level0_memory_ + i * size_data_per_element_ + offsetLevel0_;
+            // base_layer_only (adapt_for_cpu) uses int (4 bytes), native HNSW uses unsigned short (2 bytes)
+            int count = base_layer_only ? *((int*)ptr) : *((unsigned short int*)ptr);
+            total_neighbors += count;
+        }
+        return (float)total_neighbors / cur_element_count;
+    }
+
+    // Get new node pruning statistics
+    float getNewNodeAvgCandidates() const {
+        return new_node_count_ > 0 ? (float)new_node_candidates_ / new_node_count_ : 0.0f;
+    }
+    float getNewNodeAvgSelected() const {
+        return new_node_count_ > 0 ? (float)new_node_selected_ / new_node_count_ : 0.0f;
+    }
+
+    // Get bidirectional pruning statistics
+    float getBidirAvgCandidates() const {
+        return bidir_count_ > 0 ? (float)bidir_candidates_ / bidir_count_ : 0.0f;
+    }
+    float getBidirAvgSelected() const {
+        return bidir_count_ > 0 ? (float)bidir_selected_ / bidir_count_ : 0.0f;
+    }
+    long getBidirCount() const {
+        return bidir_count_;
     }
 
     void
@@ -1463,6 +1712,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         dist_t curdist = calcDistance(query_data, enterpoint_node_);
 
         if (base_layer_only) {
+            // Graph has no upper levels (loaded from GPU format), use seed points
             for (int i = 0; i < num_seeds; i++) {
                 tableint obj = i * (max_elements_ / num_seeds);
                 dist_t dist = fstdistfunc_(query_data, getDataByInternalId(obj), dist_func_param_);

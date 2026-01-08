@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -167,6 +169,59 @@ is_faiss_fourcc_error(const char* what) {
            (error_msg.find("not recognized") != std::string::npos);
 }
 
+// Helper function to print HNSW index statistics (average neighbors at level 0)
+static void
+PrintHnswIndexStats(const std::vector<std::shared_ptr<faiss::Index>>& indexes) {
+    for (size_t idx = 0; idx < indexes.size(); ++idx) {
+        const auto& index = indexes[idx];
+        if (index == nullptr) {
+            continue;
+        }
+
+        // Try to get IndexHNSW from the index (could be wrapped in IndexRefine, etc.)
+        const faiss::IndexHNSW* hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(index.get());
+
+        // Check if it's wrapped in IndexRefine
+        if (hnsw_index == nullptr) {
+            const faiss::IndexRefine* refine_index = dynamic_cast<const faiss::IndexRefine*>(index.get());
+            if (refine_index != nullptr) {
+                hnsw_index = dynamic_cast<const faiss::IndexHNSW*>(refine_index->base_index);
+            }
+        }
+
+        if (hnsw_index == nullptr || hnsw_index->hnsw.levels.empty()) {
+            continue;
+        }
+
+        const faiss::HNSW& hnsw = hnsw_index->hnsw;
+        int64_t ntotal = hnsw_index->ntotal;
+        if (ntotal == 0) {
+            continue;
+        }
+
+        // Calculate average neighbors at level 0
+        size_t total_neighbors = 0;
+        int nb_neighbors_level0 = hnsw.nb_neighbors(0);  // max neighbors at level 0
+
+        for (int64_t i = 0; i < ntotal; ++i) {
+            size_t begin, end;
+            hnsw.neighbor_range(i, 0, &begin, &end);
+            // Count actual (non -1) neighbors
+            size_t count = 0;
+            for (size_t j = begin; j < end; ++j) {
+                if (hnsw.neighbors[j] >= 0) {
+                    count++;
+                }
+            }
+            total_neighbors += count;
+        }
+
+        float avg_neighbors = static_cast<float>(total_neighbors) / ntotal;
+        std::cout << "[INDEX_STATS] avg_neighbors=" << std::fixed << std::setprecision(2) << avg_neighbors
+                  << " (max_neighbors_level0=" << nb_neighbors_level0 << ", ntotal=" << ntotal << ")" << std::endl;
+    }
+}
+
 //
 class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
  public:
@@ -243,6 +298,9 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
             }
         }
 
+        // Print HNSW index statistics
+        PrintHnswIndexStats(indexes);
+
         return Status::success;
     }
 
@@ -293,6 +351,9 @@ class BaseFaissRegularIndexNode : public BaseFaissIndexNode {
                 return Status::faiss_inner_error;
             }
         }
+
+        // Print HNSW index statistics
+        PrintHnswIndexStats(indexes);
 
         return Status::success;
     }
