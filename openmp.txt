@@ -1,0 +1,1036 @@
+====================================================================================================
+Faiss 库 OpenMP 使用情况详细报告
+====================================================================================================
+
+【摘要统计】
+----------------------------------------------------------------------------------------------------
+总计 OpenMP 调用点: 342 处
+
+按 Pragma 类型统计:
+  parallel for                   :  86 处
+  parallel for (conditional)     :  56 处
+  for                            :  55 处
+  parallel block                 :  37 处
+  parallel (conditional)         :  19 处
+  parallel (reduction)           :  15 处
+  parallel for reduction         :  15 处
+  barrier                        :  14 处
+  critical                       :  13 处
+  for (scheduled)                :   8 处
+  single                         :   7 处
+  parallel for (fixed threads)   :   5 处
+  parallel for (scheduled)       :   5 处
+  master                         :   4 处
+  for (reduction)                :   3 处
+
+按功能模块统计 (Top 20):
+  向量距离计算 (L2/IP/余弦等)                       :  39 处
+  HNSW 图结构操作                               :  26 处
+  并行排序算法                                   :  26 处
+  加性量化器 (RQ/LSQ)                           :  20 处
+  IVF 索引添加/搜索                              :  18 处
+  GPU 编码格式转换                               :  14 处
+  IVF-FastScan 搜索                          :  13 处
+  汉明距离计算 (二进制向量)                           :  12 处
+  NNDescent 图构建                            :  11 处
+  NSG 图构建                                  :  10 处
+  PQ 索引操作                                  :  10 处
+  SQ 编码/解码                                 :   9 处
+  堆合并/排序操作                                 :   9 处
+  PQ 编码/解码/训练                              :   9 处
+  二进制 IVF 索引                               :   7 处
+  二进制哈希索引                                  :   6 处
+  IVF-AQ FastScan                          :   6 处
+  随机数/向量生成                                 :   6 处
+  LSQ 训练优化                                 :   6 处
+  Zn 格子编码                                  :   6 处
+
+按文件统计 (Top 20):
+  utils/distances.cpp                                :  31 处
+  utils/sorting.cpp                                  :  26 处
+  IndexHNSW.cpp                                      :  18 处
+  IndexIVF.cpp                                       :  18 处
+  gpu/impl/InterleavedCodes.cpp                      :  14 处
+  IndexIVFFastScan.cpp                               :  13 处
+  utils/hamming.cpp                                  :  12 处
+  IndexPQ.cpp                                        :  10 处
+  utils/Heap.cpp                                     :   9 处
+  impl/AdditiveQuantizer.cpp                         :   9 处
+  impl/NNDescent.cpp                                 :   9 处
+  impl/ProductQuantizer.cpp                          :   9 处
+  IndexScalarQuantizer.cpp                           :   7 处
+  IndexBinaryIVF.cpp                                 :   7 处
+  IndexBinaryHNSW.cpp                                :   6 处
+  IndexBinaryHash.cpp                                :   6 处
+  IndexIVFAdditiveQuantizerFastScan.cpp              :   6 处
+  utils/binary_distances.cpp                         :   6 处
+  utils/random.cpp                                   :   6 处
+  impl/NSG.cpp                                       :   6 处
+
+
+====================================================================================================
+【详细调用点列表】
+====================================================================================================
+
+====================================================================================================
+目录: core (155 处)
+====================================================================================================
+
+  文件: AutoTune.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  92     | FAISS_THROW_IF_NOT_MSG              | parallel for reduction    | 自动调优
+  701    | if                                  | parallel for              | 自动调优
+
+  文件: Clustering.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  170    | memset                              | parallel block            | K-means 聚类
+  210    | memset                              | parallel for              | K-means 聚类
+  350    | for                                 | parallel for              | K-means 聚类
+  360    | for                                 | parallel for              | K-means 聚类
+
+  文件: IVFlib.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  505    | if                                  | parallel (conditional)    | IVF 库函数
+  512    | tmp                                 | for                       | IVF 库函数
+
+  文件: Index.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  62     | Index::reconstruct_batch            | parallel for (condition.. | 索引基类操作
+  77     | Index::reconstruct_n                | parallel for (condition.. | 索引基类操作
+  121    | Index::compute_residual_n           | parallel for              | 索引基类操作
+
+  文件: Index2Layer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  330    | Index2Layer::sa_decode              | parallel block            | 两层索引
+  334    | residual                            | for                       | 两层索引
+
+  文件: IndexAdditiveQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  131    | search_with_decompress              | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  167    | search_with_LUT                     | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  588    | beam_distances                      | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+
+  文件: IndexAdditiveQuantizerFastScan.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  134    | compute_float_LUT                   | parallel for reduction    | AQ FastScan
+
+  文件: IndexBinaryHNSW.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  118    | for                                 | parallel block            | HNSW 图结构操作
+  127    | omp_get_thread_num                  | for (scheduled)           | HNSW 图结构操作
+  210    | bres                                | parallel block            | HNSW 图结构操作
+  216    | res                                 | for                       | HNSW 图结构操作
+  225    | bres                                | parallel for              | HNSW 图结构操作
+  282    | ~FlatHammingDis                     | critical                  | HNSW 图结构操作
+
+  文件: IndexBinaryHash.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  212    | FAISS_THROW_IF_NOT_MSG              | parallel (reduction)      | 二进制哈希索引
+  216    | pres                                | for                       | 二进制哈希索引
+  246    | FAISS_THROW_IF_NOT                  | parallel for reduction    | 二进制哈希索引
+  420    | FAISS_THROW_IF_NOT_MSG              | parallel (reduction)      | 二进制哈希索引
+  424    | pres                                | for                       | 二进制哈希索引
+  454    | FAISS_THROW_IF_NOT                  | parallel for reduction    | 二进制哈希索引
+
+  文件: IndexBinaryIVF.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  522    | search_knn_hamming_heap             | parallel (reduction)      | 二进制 IVF 索引
+  527    | scanner                             | for                       | 二进制 IVF 索引
+  619    | search_knn_binary_dis_heap          | parallel (reduction)      | 二进制 IVF 索引
+  624    | scanner                             | for                       | 二进制 IVF 索引
+  721    | for                                 | parallel for reduction    | 二进制 IVF 索引
+  1157   | all_pres                            | parallel (reduction)      | 二进制 IVF 索引
+  1191   | FAISS_THROW_IF_NOT                  | for                       | 二进制 IVF 索引
+
+  文件: IndexFastScan.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  327    | if                                  | parallel for (fixed thr.. | FastScan 索引
+  376    | if                                  | parallel for (condition.. | FastScan 索引
+
+  文件: IndexFlat.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  467    | FAISS_THROW_IF_NOT_MSG              | parallel for (condition.. | Flat 索引暴力搜索
+
+  文件: IndexHNSW.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  165    | std::swap                           | parallel (conditional)    | HNSW 图结构操作
+  178    | omp_get_thread_num                  | for (scheduled)           | HNSW 图结构操作
+  286    | for                                 | parallel (conditional)    | HNSW 图结构操作
+  294    | storage_distance_computer           | for (reduction)           | HNSW 图结构操作
+  379    | IndexHNSW::shrink_level_0_neighbors | parallel block            | HNSW 图结构操作
+  384    | storage_distance_computer           | for                       | HNSW 图结构操作
+  440    | bres                                | parallel block            | HNSW 图结构操作
+  448    | res                                 | for                       | HNSW 图结构操作
+  466    | for                                 | critical                  | HNSW 图结构操作
+  471    | if                                  | parallel for              | HNSW 图结构操作
+  484    | IndexHNSW::init_level_0_from_knng.. | parallel for              | HNSW 图结构操作
+  525    | omp_init_lock                       | parallel block            | HNSW 图结构操作
+  533    | vec                                 | for (scheduled)           | HNSW 图结构操作
+  560    | IndexHNSW::reorder_links            | parallel block            | HNSW 图结构操作
+  568    | storage_distance_computer           | for                       | HNSW 图结构操作
+  818    | IndexHNSW::search                   | parallel block            | HNSW 图结构操作
+  827    | candidates                          | for (reduction)           | HNSW 图结构操作
+  952    | nearest_d                           | for                       | HNSW 图结构操作
+
+  文件: IndexIDMap.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  136    | if                                  | parallel for              | ID映射索引
+  159    | if                                  | parallel for              | ID映射索引
+
+  文件: IndexIVF.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  262    | dm_adder                            | parallel (reduction)      | IVF 索引添加/搜索
+  389    | stats                               | parallel for (condition.. | IVF 索引添加/搜索
+  491    | if                                  | parallel (reduction)      | IVF 索引添加/搜索
+  620    | if                                  | for                       | IVF 索引添加/搜索
+  666    | init_result                         | for (scheduled)           | IVF 索引添加/搜索
+  681    | for                                 | single                    | IVF 索引添加/搜索
+  684    | init_result                         | barrier                   | IVF 索引添加/搜索
+  685    | init_result                         | critical                  | IVF 索引添加/搜索
+  690    | init_result                         | barrier                   | IVF 索引添加/搜索
+  691    | init_result                         | single                    | IVF 索引添加/搜索
+  698    | local_dis                           | single                    | IVF 索引添加/搜索
+  703    | for                                 | for (scheduled)           | IVF 索引添加/搜索
+  715    | init_result                         | critical                  | IVF 索引添加/搜索
+  724    | for                                 | single                    | IVF 索引添加/搜索
+  841    | all_pres                            | parallel (reduction)      | IVF 索引添加/搜索
+  911    | if                                  | for                       | IVF 索引添加/搜索
+  1149   | search_preassigned                  | parallel for (condition.. | IVF 索引添加/搜索
+  1211   | if                                  | parallel for (condition.. | IVF 索引添加/搜索
+
+  文件: IndexIVFAdditiveQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  71     | residuals                           | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  100    | IndexIVFAdditiveQuantizer::sa_dec.. | parallel (conditional)    | 加性量化器 (RQ/LSQ)
+  104    | residual                            | for                       | 加性量化器 (RQ/LSQ)
+
+  文件: IndexIVFAdditiveQuantizerFastScan.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  222    | compute_LUT                         | parallel for reduction    | IVF-AQ FastScan
+  264    | centroids                           | parallel for (condition.. | IVF-AQ FastScan
+  274    | for                                 | parallel for (condition.. | IVF-AQ FastScan
+  409    | if                                  | parallel block            | IVF-AQ FastScan
+  414    | centroid                            | for                       | IVF-AQ FastScan
+  440    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | IVF-AQ FastScan
+
+  文件: IndexIVFFastScan.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  310    | if                                  | parallel for (condition.. | IVF-FastScan 搜索
+  691    | search_implem_14                    | parallel for reduction    | IVF-FastScan 搜索
+  807    | if                                  | parallel block            | IVF-FastScan 搜索
+  811    | pres                                | for (reduction)           | IVF-FastScan 搜索
+  889    | compute_LUT                         | parallel for reduction    | IVF-FastScan 搜索
+  965    | compute_LUT_uint8                   | parallel for reduction    | IVF-FastScan 搜索
+  1617   | while                               | parallel (reduction)      | IVF-FastScan 搜索
+  1637   | if                                  | for (scheduled)           | IVF-FastScan 搜索
+  1692   | for                                 | single                    | IVF-FastScan 搜索
+  1699   | for                                 | barrier                   | IVF-FastScan 搜索
+  1700   | for                                 | critical                  | IVF-FastScan 搜索
+  1715   | for                                 | barrier                   | IVF-FastScan 搜索
+  1716   | for                                 | single                    | IVF-FastScan 搜索
+
+  文件: IndexIVFFlat.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  101    | dm_adder                            | parallel (reduction)      | IVF-Flat 添加/搜索
+  630    | FAISS_THROW_IF_NOT_MSG              | parallel (reduction)      | IVF-Flat 添加/搜索
+  665    | pair                                | critical                  | IVF-Flat 添加/搜索
+  775    | toremove                            | parallel for              | IVF-Flat 添加/搜索
+
+  文件: IndexIVFPQ.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  190    | IndexIVFPQ::sa_decode               | parallel block            | IVF-PQ 编码/解码
+  194    | residual                            | for                       | IVF-PQ 编码/解码
+  1158   | for                                 | critical                  | IVF-PQ 编码/解码
+
+  文件: IndexIVFPQFastScan.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  238    | ip_table                            | parallel for (condition.. | IVF-PQ FastScan
+  263    | memset                              | parallel for (condition.. | IVF-PQ FastScan
+  308    | IndexIVFPQFastScan::sa_decode       | parallel (conditional)    | IVF-PQ FastScan
+  312    | residual                            | for                       | IVF-PQ FastScan
+
+  文件: IndexIVFPQR.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  149    | IndexIVFPQR::search_preassigned     | parallel (reduction)      | IVF-PQR 精细化搜索
+  154    | IndexIVFPQ::search_preassigned      | for                       | IVF-PQR 精细化搜索
+
+  文件: IndexIVFRaBitQ.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  49     | memset                              | parallel (conditional)    | IVF-RaBitQ 索引
+  53     | centroid                            | for                       | IVF-RaBitQ 索引
+  84     | dm_add                              | parallel block            | IVF-RaBitQ 索引
+  227    | IndexIVFRaBitQ::sa_decode           | parallel block            | IVF-RaBitQ 索引
+  231    | centroid                            | for                       | IVF-RaBitQ 索引
+
+  文件: IndexIVFScalarQuantizerCC.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  67     | dm_add                              | parallel (reduction)      | IVF-SQ CC 索引
+
+  文件: IndexIVFSpectralHash.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  126    | for                                 | for                       | IVF 光谱哈希
+  178    | zero                                | for                       | IVF 光谱哈希
+
+  文件: IndexLattice.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  77     | IndexLattice::sa_encode             | parallel for              | 格子量化索引
+  101    | IndexLattice::sa_decode             | parallel for              | 格子量化索引
+
+  文件: IndexNNDescent.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  128    | for                                 | parallel block            | NNDescent 图构建
+  135    | storage_distance_computer           | for                       | NNDescent 图构建
+
+  文件: IndexNSG.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  78     | for                                 | parallel block            | NSG 图构建
+  85     | storage_distance_computer           | for                       | NSG 图构建
+  209    | FAISS_THROW_IF_NOT                  | parallel for              | NSG 图构建
+  247    | IndexNSG::check_knn_graph           | parallel for reduction    | NSG 图构建
+
+  文件: IndexPQ.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  349    | if                                  | parallel for              | PQ 索引操作
+  361    | if                                  | parallel for reduction    | PQ 索引操作
+  482    | memset                              | parallel block            | PQ 索引操作
+  486    | histi                               | for                       | PQ 索引操作
+  504    | for                                 | critical                  | PQ 索引操作
+  923    | if                                  | parallel for              | PQ 索引操作
+  949    | for                                 | parallel (conditional)    | PQ 索引操作
+  953    | msk                                 | for                       | PQ 索引操作
+  1086   | for                                 | parallel (conditional)    | PQ 索引操作
+  1090   | msk                                 | for                       | PQ 索引操作
+
+  文件: IndexRaBitQ.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  80     | f                                   | parallel (conditional)    | RaBitQ 索引
+  85     | resi                                | for                       | RaBitQ 索引
+
+  文件: IndexRefine.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  109    | assert                              | parallel (conditional)    | 精细化重排序
+  113    | dc                                  | for                       | 精细化重排序
+  180    | if                                  | parallel (conditional)    | 精细化重排序
+  185    | dc                                  | for                       | 精细化重排序
+
+  文件: IndexRowwiseMinMax.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  229    | minmax                              | for                       | 行归一化
+  292    | tmp                                 | for                       | 行归一化
+
+  文件: IndexScaNN.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  74     | reorder_2_heaps                     | parallel for              | ScaNN 索引
+
+  文件: IndexScalarQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  68     | FAISS_THROW_IF_NOT                  | parallel block            | SQ 编码/解码
+  75     | scanner                             | for                       | SQ 编码/解码
+  170    | memset                              | parallel (conditional)    | SQ 编码/解码
+  174    | residual                            | for                       | SQ 编码/解码
+  198    | squant                              | parallel (conditional)    | SQ 编码/解码
+  202    | residual                            | for                       | SQ 编码/解码
+  231    | dm_add                              | parallel block            | SQ 编码/解码
+
+  文件: MetaIndexes.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  187    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | 元索引
+
+====================================================================================================
+目录: gpu/impl (15 处)
+====================================================================================================
+
+  文件: gpu/impl/InterleavedCodes.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  110    | if                                  | parallel for              | GPU 编码格式转换
+  123    | for                                 | parallel for              | GPU 编码格式转换
+  139    | for                                 | parallel for              | GPU 编码格式转换
+  173    | unpackInterleavedWord               | parallel for              | GPU 编码格式转换
+  218    | if                                  | parallel for              | GPU 编码格式转换
+  236    | for                                 | parallel for              | GPU 编码格式转换
+  258    | for                                 | parallel for              | GPU 编码格式转换
+  383    | if                                  | parallel for              | GPU 编码格式转换
+  398    | for                                 | parallel for              | GPU 编码格式转换
+  416    | for                                 | parallel for              | GPU 编码格式转换
+  451    | packInterleavedWord                 | parallel for              | GPU 编码格式转换
+  498    | if                                  | parallel for              | GPU 编码格式转换
+  514    | for                                 | parallel for              | GPU 编码格式转换
+  534    | for                                 | parallel for              | GPU 编码格式转换
+
+  文件: gpu/impl/RemapIndices.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  24     | FAISS_ASSERT                        | parallel for              | GPU 索引重映射
+
+====================================================================================================
+目录: impl (68 处)
+====================================================================================================
+
+  文件: impl/AdditiveQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  247    | if                                  | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  265    | FAISS_THROW_IF_NOT_MSG              | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  294    | if                                  | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  319    | AdditiveQuantizer::compute_centro.. | parallel block            | 加性量化器 (RQ/LSQ)
+  322    | tmp                                 | for                       | 加性量化器 (RQ/LSQ)
+  410    | compute_LUT                         | parallel (conditional)    | 加性量化器 (RQ/LSQ)
+  413    | dis                                 | for                       | 加性量化器 (RQ/LSQ)
+  439    | fvec_norms_L2sqr                    | parallel (conditional)    | 加性量化器 (RQ/LSQ)
+  442    | dis                                 | for                       | 加性量化器 (RQ/LSQ)
+
+  文件: impl/AuxIndexStructures.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  132    | set_lims                            | barrier                   | 辅助数据结构
+  134    | set_lims                            | single                    | 辅助数据结构
+  137    | set_lims                            | barrier                   | 辅助数据结构
+
+  文件: impl/HNSW.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  114    | nb_neighbors                        | parallel for reduction    | HNSW 图结构操作
+  608    | HNSW::add_with_locks                | critical                  | HNSW 图结构操作
+
+  文件: impl/LocalSearchQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  199    | stddev                              | parallel for              | LSQ 训练优化
+  569    | evaluate                            | parallel for reduction    | LSQ 训练优化
+  603    | FAISS_THROW_IF_NOT                  | parallel for (scheduled)  | LSQ 训练优化
+  691    | scope                               | parallel for              | LSQ 训练优化
+  747    | fvec_norms_L2sqr                    | parallel for              | LSQ 训练优化
+  767    | decoded_x                           | parallel for reduction    | LSQ 训练优化
+
+  文件: impl/NNDescent.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  160    | for                                 | parallel for (scheduled)  | NNDescent 图构建
+  179    | NNDescent::update                   | parallel for              | NNDescent 图构建
+  189    | for                                 | parallel for              | NNDescent 图构建
+  214    | for                                 | parallel block            | NNDescent 图构建
+  217    | rng                                 | for                       | NNDescent 图构建
+  267    | for                                 | parallel for              | NNDescent 图构建
+  310    | NNDescent::generate_eval_set        | parallel for              | NNDescent 图构建
+  359    | NNDescent::init_graph               | parallel block            | NNDescent 图构建
+  362    | rng                                 | for                       | NNDescent 图构建
+
+  文件: impl/NSG.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  159    | std::fill_n                         | parallel for              | NSG 图构建
+  331    | NSG::link                           | parallel block            | NSG 图构建
+  342    | storage_distance_computer           | for (scheduled)           | NSG 图构建
+  360    | locks                               | parallel block            | NSG 图构建
+  365    | storage_distance_computer           | for (scheduled)           | NSG 图构建
+  636    | NSG::check_graph                    | parallel for              | NSG 图构建
+
+  文件: impl/PolysemousTraining.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  783    | if                                  | parallel for (fixed thr.. | 多义编码训练
+  850    | if                                  | parallel for              | 多义编码训练
+
+  文件: impl/ProductAdditiveQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  102    | for                                 | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  169    | for                                 | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  179    | for                                 | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  208    | if                                  | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+  239    | FAISS_THROW_IF_NOT_MSG              | parallel for (condition.. | 加性量化器 (RQ/LSQ)
+
+  文件: impl/ProductQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  317    | ProductQuantizer::decode            | parallel for (condition.. | PQ 编码/解码/训练
+  412    | if                                  | parallel for              | PQ 编码/解码/训练
+  420    | compute_distance_tables             | parallel for              | PQ 编码/解码/训练
+  483    | if                                  | parallel for (condition.. | PQ 编码/解码/训练
+  517    | if                                  | parallel for (condition.. | PQ 编码/解码/训练
+  691    | pq_knn_search_with_tables           | parallel for (condition.. | PQ 编码/解码/训练
+  788    | if                                  | parallel for              | PQ 编码/解码/训练
+  802    | for                                 | parallel for              | PQ 编码/解码/训练
+  823    | FAISS_THROW_IF_NOT                  | parallel for              | PQ 编码/解码/训练
+
+  文件: impl/RaBitQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  70     | if                                  | parallel for (condition.. | RaBitQ 量化
+  149    | FAISS_ASSERT                        | parallel for (condition.. | RaBitQ 量化
+
+  文件: impl/ResultHandler.h
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  264    | add_results                         | parallel for              | 搜索结果处理
+  460    | add_results                         | parallel for              | 搜索结果处理
+  665    | add_results                         | parallel for              | 搜索结果处理
+  724    | add_results                         | parallel for              | 搜索结果处理
+
+  文件: impl/ScalarQuantizer.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  158    | memset                              | parallel for (condition.. | SQ 编码/解码
+  166    | squant                              | parallel for (condition.. | SQ 编码/解码
+
+  文件: impl/ScalarQuantizerOp.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  180    | trained_d                           | parallel for              | SQ 操作
+
+  文件: impl/lattice_Zn.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  270    | EnumeratedVectors::encode_multi     | parallel (conditional)    | Zn 格子编码
+  272    | EnumeratedVectors::encode_multi     | for                       | Zn 格子编码
+  281    | EnumeratedVectors::decode_multi     | parallel (conditional)    | Zn 格子编码
+  283    | EnumeratedVectors::decode_multi     | for                       | Zn 格子编码
+  379    | ZnSphereSearch::search_multi        | parallel (conditional)    | Zn 格子编码
+  381    | ZnSphereSearch::search_multi        | for                       | Zn 格子编码
+
+  文件: impl/residual_quantizer_encode_steps.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  280    | InterruptCallback::check            | parallel for (condition.. | 残差量化编码步骤
+  404    | FAISS_THROW_IF_NOT                  | parallel for (scheduled)  | 残差量化编码步骤
+
+====================================================================================================
+目录: invlists (5 处)
+====================================================================================================
+
+  文件: invlists/BlockInvertedLists.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  85     | BlockInvertedLists::remove_ids      | parallel for              | 倒排列表操作
+
+  文件: invlists/DirectMap.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  189    | if                                  | parallel for              | 直接映射
+
+  文件: invlists/InvertedLists.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  167    | InvertedLists::merge_from           | parallel for              | 倒排列表操作
+
+  文件: invlists/OnDiskInvertedLists.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  608    | update_totsize                      | parallel for              | 倒排列表操作
+  634    | if                                  | critical                  | 倒排列表操作
+
+====================================================================================================
+目录: utils (97 处)
+====================================================================================================
+
+  文件: utils/Heap.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  19     | unknown                             | parallel for              | 堆合并/排序操作
+  26     | for                                 | parallel for              | 堆合并/排序操作
+  36     | assert                              | parallel for (condition.. | 堆合并/排序操作
+  66     | assert                              | parallel for (condition.. | 堆合并/排序操作
+  94     | if                                  | parallel for (condition.. | 堆合并/排序操作
+  113    | for                                 | parallel for (condition.. | 堆合并/排序操作
+  172    | if                                  | parallel (conditional)    | 堆合并/排序操作
+  182    | buf2                                | for                       | 堆合并/排序操作
+  265    | reorder_2_heaps                     | parallel for (condition.. | 堆合并/排序操作
+
+  文件: utils/binary_distances.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  213    | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  265    | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  408    | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  461    | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  576    | binary_range_search                 | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  579    | pres                                | for                       | 向量距离计算 (L2/IP/余弦等)
+
+  文件: utils/distances.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  66     | fvec_norms_L2                       | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  77     | fvec_norms_L2sqr                    | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  112    | fvec_renorm_L2_omp                  | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  176    | exhaustive_inner_product_seq        | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  179    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  214    | exhaustive_inner_product_seq_impl   | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  217    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  291    | exhaustive_L2sqr_seq                | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  294    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  327    | exhaustive_L2sqr_seq_impl           | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  330    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  405    | exhaustive_cosine_seq               | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  408    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  446    | exhaustive_cosine_seq_impl          | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  449    | resi                                | for                       | 向量距离计算 (L2/IP/余弦等)
+  633    | if                                  | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  711    | if                                  | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  787    | if                                  | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1006   | exhaustive_L2sqr_nearest_imp        | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  1421   | fvec_inner_products_by_idx          | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1470   | fvec_L2sqr_by_idx                   | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1517   | pairwise_indexed_L2sqr              | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1535   | pairwise_indexed_inner_product      | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1563   | if                                  | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  1601   | if                                  | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  1639   | if                                  | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  1690   | if                                  | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1694   | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1733   | inner_product_to_L2sqr              | parallel for              | 向量距离计算 (L2/IP/余弦等)
+  1768   | if                                  | parallel block            | 向量距离计算 (L2/IP/余弦等)
+  1781   | if                                  | parallel for              | 向量距离计算 (L2/IP/余弦等)
+
+  文件: utils/extra_distances.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  41     | pairwise_extra_distances_template   | parallel for (condition.. | 向量距离计算 (L2/IP/余弦等)
+  73     | for                                 | parallel for              | 向量距离计算 (L2/IP/余弦等)
+
+  文件: utils/hamming.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  184    | for                                 | parallel for              | 汉明距离计算 (二进制向量)
+  261    | for                                 | parallel for              | 汉明距离计算 (二进制向量)
+  298    | hamming_range_search                | parallel block            | 汉明距离计算 (二进制向量)
+  302    | pres                                | for                       | 汉明距离计算 (二进制向量)
+  378    | fvecs2bitvecs                       | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  389    | bitvecs2fvecs                       | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  434    | for                                 | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  655    | if                                  | parallel for              | 汉明距离计算 (二进制向量)
+  695    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  718    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  737    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | 汉明距离计算 (二进制向量)
+  760    | FAISS_THROW_IF_NOT                  | parallel for (condition.. | 汉明距离计算 (二进制向量)
+
+  文件: utils/random.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  102    | rng0                                | parallel for              | 随机数/向量生成
+  121    | rng0                                | parallel for              | 随机数/向量生成
+  155    | rng0                                | parallel for              | 随机数/向量生成
+  173    | rng0                                | parallel for              | 随机数/向量生成
+  215    | rng0                                | parallel for              | 随机数/向量生成
+  256    | float_rand                          | parallel for (condition.. | 随机数/向量生成
+
+  文件: utils/sorting.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  63     | s1s                                 | parallel for (fixed thr.. | 并行排序算法
+  95     | assert                              | parallel for (fixed thr.. | 并行排序算法
+  151    | fvec_argsort_parallel               | parallel block            | 并行排序算法
+  161    | segs                                | parallel for              | 并行排序算法
+  178    | while                               | parallel for (fixed thr.. | 并行排序算法
+  259    | memset                              | parallel block            | 并行排序算法
+  274    | for                                 | critical                  | 并行排序算法
+  280    | for                                 | barrier                   | 并行排序算法
+  283    | for                                 | master                    | 并行排序算法
+  291    | for                                 | barrier                   | 并行排序算法
+  293    | for                                 | critical                  | 并行排序算法
+  303    | for                                 | barrier                   | 并行排序算法
+  309    | for                                 | barrier                   | 并行排序算法
+  312    | for                                 | master                    | 并行排序算法
+  485    | did_wrap                            | parallel block            | 并行排序算法
+  499    | for                                 | critical                  | 并行排序算法
+  507    | for                                 | barrier                   | 并行排序算法
+  511    | for                                 | master                    | 并行排序算法
+  549    | for                                 | barrier                   | 并行排序算法
+  556    | for                                 | master                    | 并行排序算法
+  595    | if                                  | barrier                   | 并行排序算法
+  638    | for                                 | barrier                   | 并行排序算法
+  711    | hashtable_int64_to_int64_init       | parallel for              | 并行排序算法
+  731    | bucket_no                           | parallel for              | 并行排序算法
+  748    | omp_get_max_threads                 | parallel for reduction    | 并行排序算法
+  795    | hk                                  | parallel for              | 并行排序算法
+
+  文件: utils/utils.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  287    | merge_result_table_with             | parallel (reduction)      | 通用工具函数
+  292    | tmpD                                | for                       | 通用工具函数
+  458    | bvecs_checksum                      | parallel for (condition.. | 通用工具函数
+  532    | nt_per_thread                       | parallel (reduction)      | 通用工具函数
+  542    | if                                  | for                       | 通用工具函数
+
+====================================================================================================
+目录: utils/distances_fused (2 处)
+====================================================================================================
+
+  文件: utils/distances_fused/avx512.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  267    | for                                 | parallel for (scheduled)  | AVX512 融合距离
+
+  文件: utils/distances_fused/simdlib_based.cpp
+  ------------------------------------------------------------------------------------------------
+  行号     | 函数名                                 | Pragma类型                  | 用途
+  ------------------------------------------------------------------------------------------------
+  262    | for                                 | parallel for (scheduled)  | SIMD 融合距离
+
+====================================================================================================
+【复杂度分析】
+====================================================================================================
+
+低复杂度 (可直接替换为 parallel_for):
+--------------------------------------------------
+  IndexBinaryHNSW.cpp:225 - bres
+  Clustering.cpp:210 - memset
+  Clustering.cpp:350 - for
+  Clustering.cpp:360 - for
+  AutoTune.cpp:701 - if
+  IndexIVFFlat.cpp:775 - toremove
+  IndexFlat.cpp:467 - FAISS_THROW_IF_NOT_MSG
+  IndexIVFAdditiveQuantizer.cpp:71 - residuals
+  IndexAdditiveQuantizer.cpp:131 - search_with_decompress
+  IndexAdditiveQuantizer.cpp:167 - search_with_LUT
+  IndexAdditiveQuantizer.cpp:588 - beam_distances
+  IndexIVFFastScan.cpp:310 - if
+  IndexScaNN.cpp:74 - reorder_2_heaps
+  Index.cpp:62 - Index::reconstruct_batch
+  Index.cpp:77 - Index::reconstruct_n
+  Index.cpp:121 - Index::compute_residual_n
+  IndexNSG.cpp:209 - FAISS_THROW_IF_NOT
+  IndexFastScan.cpp:376 - if
+  IndexIVFPQFastScan.cpp:238 - ip_table
+  IndexIVFPQFastScan.cpp:263 - memset
+  IndexPQ.cpp:349 - if
+  IndexPQ.cpp:923 - if
+  MetaIndexes.cpp:187 - FAISS_THROW_IF_NOT
+  IndexIVFAdditiveQuantizerFastScan.cpp:264 - centroids
+  IndexIVFAdditiveQuantizerFastScan.cpp:274 - for
+  IndexIVFAdditiveQuantizerFastScan.cpp:440 - FAISS_THROW_IF_NOT
+  IndexHNSW.cpp:471 - if
+  IndexHNSW.cpp:484 - IndexHNSW::init_level_0_from_knngraph
+  IndexLattice.cpp:77 - IndexLattice::sa_encode
+  IndexLattice.cpp:101 - IndexLattice::sa_decode
+  IndexIVF.cpp:389 - stats
+  IndexIVF.cpp:1149 - search_preassigned
+  IndexIVF.cpp:1211 - if
+  IndexIDMap.cpp:136 - if
+  IndexIDMap.cpp:159 - if
+  gpu/impl/RemapIndices.cpp:24 - FAISS_ASSERT
+  gpu/impl/InterleavedCodes.cpp:110 - if
+  gpu/impl/InterleavedCodes.cpp:123 - for
+  gpu/impl/InterleavedCodes.cpp:139 - for
+  gpu/impl/InterleavedCodes.cpp:173 - unpackInterleavedWord
+  gpu/impl/InterleavedCodes.cpp:218 - if
+  gpu/impl/InterleavedCodes.cpp:236 - for
+  gpu/impl/InterleavedCodes.cpp:258 - for
+  gpu/impl/InterleavedCodes.cpp:383 - if
+  gpu/impl/InterleavedCodes.cpp:398 - for
+  gpu/impl/InterleavedCodes.cpp:416 - for
+  gpu/impl/InterleavedCodes.cpp:451 - packInterleavedWord
+  gpu/impl/InterleavedCodes.cpp:498 - if
+  gpu/impl/InterleavedCodes.cpp:514 - for
+  gpu/impl/InterleavedCodes.cpp:534 - for
+  utils/extra_distances.cpp:41 - pairwise_extra_distances_template
+  utils/extra_distances.cpp:73 - for
+  utils/utils.cpp:458 - bvecs_checksum
+  utils/binary_distances.cpp:213 - for
+  utils/binary_distances.cpp:265 - for
+  utils/binary_distances.cpp:408 - for
+  utils/binary_distances.cpp:461 - for
+  utils/distances.cpp:66 - fvec_norms_L2
+  utils/distances.cpp:77 - fvec_norms_L2sqr
+  utils/distances.cpp:112 - fvec_renorm_L2_omp
+  utils/distances.cpp:633 - if
+  utils/distances.cpp:711 - if
+  utils/distances.cpp:787 - if
+  utils/distances.cpp:1421 - fvec_inner_products_by_idx
+  utils/distances.cpp:1470 - fvec_L2sqr_by_idx
+  utils/distances.cpp:1517 - pairwise_indexed_L2sqr
+  utils/distances.cpp:1535 - pairwise_indexed_inner_product
+  utils/distances.cpp:1563 - if
+  utils/distances.cpp:1601 - if
+  utils/distances.cpp:1639 - if
+  utils/distances.cpp:1690 - if
+  utils/distances.cpp:1694 - for
+  utils/distances.cpp:1733 - inner_product_to_L2sqr
+  utils/distances.cpp:1781 - if
+  utils/Heap.cpp:19 - unknown
+  utils/Heap.cpp:26 - for
+  utils/Heap.cpp:36 - assert
+  utils/Heap.cpp:66 - assert
+  utils/Heap.cpp:94 - if
+  utils/Heap.cpp:113 - for
+  utils/Heap.cpp:265 - reorder_2_heaps
+  utils/hamming.cpp:184 - for
+  utils/hamming.cpp:261 - for
+  utils/hamming.cpp:378 - fvecs2bitvecs
+  utils/hamming.cpp:389 - bitvecs2fvecs
+  utils/hamming.cpp:434 - for
+  utils/hamming.cpp:655 - if
+  utils/hamming.cpp:695 - FAISS_THROW_IF_NOT
+  utils/hamming.cpp:718 - FAISS_THROW_IF_NOT
+  utils/hamming.cpp:737 - FAISS_THROW_IF_NOT
+  utils/hamming.cpp:760 - FAISS_THROW_IF_NOT
+  utils/random.cpp:102 - rng0
+  utils/random.cpp:121 - rng0
+  utils/random.cpp:155 - rng0
+  utils/random.cpp:173 - rng0
+  utils/random.cpp:215 - rng0
+  utils/random.cpp:256 - float_rand
+  utils/sorting.cpp:161 - segs
+  utils/sorting.cpp:711 - hashtable_int64_to_int64_init
+  utils/sorting.cpp:731 - bucket_no
+  utils/sorting.cpp:795 - hk
+  invlists/OnDiskInvertedLists.cpp:608 - update_totsize
+  invlists/DirectMap.cpp:189 - if
+  invlists/BlockInvertedLists.cpp:85 - BlockInvertedLists::remove_ids
+  invlists/InvertedLists.cpp:167 - InvertedLists::merge_from
+  impl/AdditiveQuantizer.cpp:247 - if
+  impl/AdditiveQuantizer.cpp:265 - FAISS_THROW_IF_NOT_MSG
+  impl/AdditiveQuantizer.cpp:294 - if
+  impl/residual_quantizer_encode_steps.cpp:280 - InterruptCallback::check
+  impl/NSG.cpp:159 - std::fill_n
+  impl/NSG.cpp:636 - NSG::check_graph
+  impl/NNDescent.cpp:179 - NNDescent::update
+  impl/NNDescent.cpp:189 - for
+  impl/NNDescent.cpp:267 - for
+  impl/NNDescent.cpp:310 - NNDescent::generate_eval_set
+  impl/PolysemousTraining.cpp:850 - if
+  impl/LocalSearchQuantizer.cpp:199 - stddev
+  impl/LocalSearchQuantizer.cpp:691 - scope
+  impl/LocalSearchQuantizer.cpp:747 - fvec_norms_L2sqr
+  impl/ResultHandler.h:264 - add_results
+  impl/ResultHandler.h:460 - add_results
+  impl/ResultHandler.h:665 - add_results
+  impl/ResultHandler.h:724 - add_results
+  impl/ScalarQuantizerOp.cpp:180 - trained_d
+  impl/ProductQuantizer.cpp:317 - ProductQuantizer::decode
+  impl/ProductQuantizer.cpp:412 - if
+  impl/ProductQuantizer.cpp:420 - compute_distance_tables
+  impl/ProductQuantizer.cpp:483 - if
+  impl/ProductQuantizer.cpp:517 - if
+  impl/ProductQuantizer.cpp:691 - pq_knn_search_with_tables
+  impl/ProductQuantizer.cpp:788 - if
+  impl/ProductQuantizer.cpp:802 - for
+  impl/ProductQuantizer.cpp:823 - FAISS_THROW_IF_NOT
+  impl/ScalarQuantizer.cpp:158 - memset
+  impl/ScalarQuantizer.cpp:166 - squant
+  impl/ProductAdditiveQuantizer.cpp:102 - for
+  impl/ProductAdditiveQuantizer.cpp:169 - for
+  impl/ProductAdditiveQuantizer.cpp:179 - for
+  impl/ProductAdditiveQuantizer.cpp:208 - if
+  impl/ProductAdditiveQuantizer.cpp:239 - FAISS_THROW_IF_NOT_MSG
+  impl/RaBitQuantizer.cpp:70 - if
+  impl/RaBitQuantizer.cpp:149 - FAISS_ASSERT
+
+中复杂度 (需要处理归约或线程私有变量):
+--------------------------------------------------
+  IndexIVFScalarQuantizerCC.cpp:67 - dm_add [parallel (reduction)]
+  IndexIVFRaBitQ.cpp:84 - dm_add [parallel block]
+  IndexIVFRaBitQ.cpp:227 - IndexIVFRaBitQ::sa_decode [parallel block]
+  IndexBinaryHNSW.cpp:118 - for [parallel block]
+  IndexBinaryHNSW.cpp:210 - bres [parallel block]
+  Clustering.cpp:170 - memset [parallel block]
+  AutoTune.cpp:92 - FAISS_THROW_IF_NOT_MSG [parallel for reduction]
+  IndexIVFFlat.cpp:101 - dm_adder [parallel (reduction)]
+  IndexIVFFlat.cpp:630 - FAISS_THROW_IF_NOT_MSG [parallel (reduction)]
+  Index2Layer.cpp:330 - Index2Layer::sa_decode [parallel block]
+  IndexBinaryHash.cpp:212 - FAISS_THROW_IF_NOT_MSG [parallel (reduction)]
+  IndexBinaryHash.cpp:246 - FAISS_THROW_IF_NOT [parallel for reduction]
+  IndexBinaryHash.cpp:420 - FAISS_THROW_IF_NOT_MSG [parallel (reduction)]
+  IndexBinaryHash.cpp:454 - FAISS_THROW_IF_NOT [parallel for reduction]
+  IndexScalarQuantizer.cpp:68 - FAISS_THROW_IF_NOT [parallel block]
+  IndexScalarQuantizer.cpp:231 - dm_add [parallel block]
+  IndexAdditiveQuantizerFastScan.cpp:134 - compute_float_LUT [parallel for reduction]
+  IndexNNDescent.cpp:128 - for [parallel block]
+  IndexIVFFastScan.cpp:691 - search_implem_14 [parallel for reduction]
+  IndexIVFFastScan.cpp:807 - if [parallel block]
+  IndexIVFFastScan.cpp:811 - pres [for (reduction)]
+  IndexIVFFastScan.cpp:889 - compute_LUT [parallel for reduction]
+  IndexIVFFastScan.cpp:965 - compute_LUT_uint8 [parallel for reduction]
+  IndexIVFFastScan.cpp:1617 - while [parallel (reduction)]
+  IndexIVFPQ.cpp:190 - IndexIVFPQ::sa_decode [parallel block]
+  IndexNSG.cpp:78 - for [parallel block]
+  IndexNSG.cpp:247 - IndexNSG::check_knn_graph [parallel for reduction]
+  IndexBinaryIVF.cpp:522 - search_knn_hamming_heap [parallel (reduction)]
+  IndexBinaryIVF.cpp:619 - search_knn_binary_dis_heap [parallel (reduction)]
+  IndexBinaryIVF.cpp:721 - for [parallel for reduction]
+  IndexBinaryIVF.cpp:1157 - all_pres [parallel (reduction)]
+  IndexPQ.cpp:361 - if [parallel for reduction]
+  IndexPQ.cpp:482 - memset [parallel block]
+  IndexIVFAdditiveQuantizerFastScan.cpp:222 - compute_LUT [parallel for reduction]
+  IndexIVFAdditiveQuantizerFastScan.cpp:409 - if [parallel block]
+  IndexHNSW.cpp:294 - storage_distance_computer [for (reduction)]
+  IndexHNSW.cpp:379 - IndexHNSW::shrink_level_0_neighbors [parallel block]
+  IndexHNSW.cpp:440 - bres [parallel block]
+  IndexHNSW.cpp:525 - omp_init_lock [parallel block]
+  IndexHNSW.cpp:560 - IndexHNSW::reorder_links [parallel block]
+  IndexHNSW.cpp:818 - IndexHNSW::search [parallel block]
+  IndexHNSW.cpp:827 - candidates [for (reduction)]
+  IndexIVFPQR.cpp:149 - IndexIVFPQR::search_preassigned [parallel (reduction)]
+  IndexIVF.cpp:262 - dm_adder [parallel (reduction)]
+  IndexIVF.cpp:491 - if [parallel (reduction)]
+  IndexIVF.cpp:841 - all_pres [parallel (reduction)]
+  utils/utils.cpp:287 - merge_result_table_with [parallel (reduction)]
+  utils/utils.cpp:532 - nt_per_thread [parallel (reduction)]
+  utils/binary_distances.cpp:576 - binary_range_search [parallel block]
+  utils/distances.cpp:176 - exhaustive_inner_product_seq [parallel block]
+  utils/distances.cpp:214 - exhaustive_inner_product_seq_impl [parallel block]
+  utils/distances.cpp:291 - exhaustive_L2sqr_seq [parallel block]
+  utils/distances.cpp:327 - exhaustive_L2sqr_seq_impl [parallel block]
+  utils/distances.cpp:405 - exhaustive_cosine_seq [parallel block]
+  utils/distances.cpp:446 - exhaustive_cosine_seq_impl [parallel block]
+  utils/distances.cpp:1006 - exhaustive_L2sqr_nearest_imp [parallel block]
+  utils/distances.cpp:1768 - if [parallel block]
+  utils/hamming.cpp:298 - hamming_range_search [parallel block]
+  utils/sorting.cpp:151 - fvec_argsort_parallel [parallel block]
+  utils/sorting.cpp:259 - memset [parallel block]
+  utils/sorting.cpp:485 - did_wrap [parallel block]
+  utils/sorting.cpp:748 - omp_get_max_threads [parallel for reduction]
+  impl/AdditiveQuantizer.cpp:319 - AdditiveQuantizer::compute_centroid_norms [parallel block]
+  impl/NSG.cpp:331 - NSG::link [parallel block]
+  impl/NSG.cpp:360 - locks [parallel block]
+  impl/NNDescent.cpp:214 - for [parallel block]
+  impl/NNDescent.cpp:359 - NNDescent::init_graph [parallel block]
+  impl/LocalSearchQuantizer.cpp:569 - evaluate [parallel for reduction]
+  impl/LocalSearchQuantizer.cpp:767 - decoded_x [parallel for reduction]
+  impl/HNSW.cpp:114 - nb_neighbors [parallel for reduction]
+
+高复杂度 (需要重构同步逻辑):
+--------------------------------------------------
+  IndexBinaryHNSW.cpp:282 - ~FlatHammingDis [critical]
+  IndexIVFFlat.cpp:665 - pair [critical]
+  IndexIVFFastScan.cpp:1692 - for [single]
+  IndexIVFFastScan.cpp:1699 - for [barrier]
+  IndexIVFFastScan.cpp:1700 - for [critical]
+  IndexIVFFastScan.cpp:1715 - for [barrier]
+  IndexIVFFastScan.cpp:1716 - for [single]
+  IndexIVFPQ.cpp:1158 - for [critical]
+  IndexPQ.cpp:504 - for [critical]
+  IndexHNSW.cpp:466 - for [critical]
+  IndexIVF.cpp:681 - for [single]
+  IndexIVF.cpp:684 - init_result [barrier]
+  IndexIVF.cpp:685 - init_result [critical]
+  IndexIVF.cpp:690 - init_result [barrier]
+  IndexIVF.cpp:691 - init_result [single]
+  IndexIVF.cpp:698 - local_dis [single]
+  IndexIVF.cpp:715 - init_result [critical]
+  IndexIVF.cpp:724 - for [single]
+  utils/sorting.cpp:274 - for [critical]
+  utils/sorting.cpp:280 - for [barrier]
+  utils/sorting.cpp:283 - for [master]
+  utils/sorting.cpp:291 - for [barrier]
+  utils/sorting.cpp:293 - for [critical]
+  utils/sorting.cpp:303 - for [barrier]
+  utils/sorting.cpp:309 - for [barrier]
+  utils/sorting.cpp:312 - for [master]
+  utils/sorting.cpp:499 - for [critical]
+  utils/sorting.cpp:507 - for [barrier]
+  utils/sorting.cpp:511 - for [master]
+  utils/sorting.cpp:549 - for [barrier]
+  utils/sorting.cpp:556 - for [master]
+  utils/sorting.cpp:595 - if [barrier]
+  utils/sorting.cpp:638 - for [barrier]
+  invlists/OnDiskInvertedLists.cpp:634 - if [critical]
+  impl/HNSW.cpp:608 - HNSW::add_with_locks [critical]
+  impl/AuxIndexStructures.cpp:132 - set_lims [barrier]
+  impl/AuxIndexStructures.cpp:134 - set_lims [single]
+  impl/AuxIndexStructures.cpp:137 - set_lims [barrier]
+
+====================================================================================================
+报告生成完毕
+====================================================================================================
