@@ -15,8 +15,8 @@
 
 add_definitions(-DKNOWHERE_WITH_CUVS)
 set(CUVS_VERSION "${RAPIDS_VERSION}")
-set(CUVS_FORK "rapidsai")
-set(CUVS_PINNED_TAG "v25.10.00")
+set(CUVS_FORK "marcelo-cjl")
+set(CUVS_PINNED_TAG "kernel")
 
 rapids_find_package(CUDAToolkit REQUIRED BUILD_EXPORT_SET knowhere-exports
                     INSTALL_EXPORT_SET knowhere-exports)
@@ -29,6 +29,7 @@ function(find_and_configure_cuvs)
   # -----------------------------------------------------
   # Invoke CPM find_package()
   # -----------------------------------------------------
+
   rapids_cpm_find(
     cuvs
     ${PKG_VERSION}
@@ -52,6 +53,12 @@ function(find_and_configure_cuvs)
     "BUILD_MG_ALGOS ${PKG_BUILD_MG_ALGOS}"
     "CUVS_USE_FAISS_STATIC OFF" # Turn this on to build FAISS into your binary
     "CUVS_NVTX OFF")
+
+  # Ensure rmm is built even when added with EXCLUDE_FROM_ALL by rapids-cmake.
+  # Without this, librmm.so is referenced but never compiled.
+  if(TARGET rmm)
+    set_target_properties(rmm PROPERTIES EXCLUDE_FROM_ALL FALSE)
+  endif()
 
   if(cuvs_ADDED)
     message(VERBOSE "KNOWHERE: Using CUVS located in ${cuvs_SOURCE_DIR}")
