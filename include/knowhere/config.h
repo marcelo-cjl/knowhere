@@ -592,6 +592,7 @@ class BaseConfig : public Config {
     CFG_BOOL retrieve_friendly;
     CFG_STRING data_path;
     CFG_STRING index_prefix;
+    CFG_STRING build_id;
     // the size of the raw vector data
     CFG_FLOAT vec_field_size_gb;
     // for distance metrics, we search for vectors with distance in [range_filter, radius).
@@ -679,6 +680,10 @@ class BaseConfig : public Config {
             .allow_empty_without_default()
             .for_train()
             .for_deserialize();
+        KNOWHERE_CONFIG_DECLARE_FIELD(build_id)
+            .description("build task identifier for log correlation.")
+            .allow_empty_without_default()
+            .for_train();
         KNOWHERE_CONFIG_DECLARE_FIELD(vec_field_size_gb)
             .description("the size (in GB) of the raw vector data.")
             .set_default(0)
