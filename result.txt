@@ -1,0 +1,11 @@
+=== Benchmark Results ===
+Date: Thu Apr 23 11:28:21 UTC 2026
+
+Dataset    Index                Build(s)     QPS          Recall     AvgNbrs   
+-------    -----                --------     ---          ------     -------   
+
+# cohere (768 dim, COSINE)
+cohere     GPU_CAGRA_ef100      89.1620      1643.49      0.9531     64.00     
+cohere     GPU_CAGRA_ef100      78.0576      1646.99      0.9531     64.00     
+
+=== Done ===

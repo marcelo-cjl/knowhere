@@ -210,6 +210,12 @@ class KnowhereConan(ConanFile):
         # CMake 4.x removed compatibility with cmake_minimum_required < 3.5
         tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"
 
+        # Allow overriding CUDA arch from the environment (e.g. CUDA_ARCH=89-real)
+        # to bypass the hardcoded "75-real" default in CMakeLists.txt.
+        cuda_arch = os.environ.get("CUDA_ARCH")
+        if cuda_arch:
+            tc.cache_variables["CMAKE_CUDA_ARCHITECTURES"] = cuda_arch
+
         # macOS: Apple Clang lacks OpenMP; point CMake to Homebrew's libomp
         if self.settings.os == "Macos":
             import subprocess

@@ -1,0 +1,71 @@
+=== Benchmark Raw Output ===
+Date: Thu Apr 23 11:28:21 UTC 2026
+
+WARNING: Logging before InitGoogleLogging() is written to STDERR
+I20260423 11:28:21.707386 132986375708672 benchmark_main.cc:605] [KNOWHERE][RunSearchMode][knowhere_benchm] === Benchmark Config ===
+I20260423 11:28:21.707471 132986375708672 benchmark_main.cc:606] [KNOWHERE][RunSearchMode][knowhere_benchm] dataset=cohere | index=GPU_CAGRA (adapt_for_cpu)
+I20260423 11:28:21.707476 132986375708672 benchmark_main.cc:611] [KNOWHERE][RunSearchMode][knowhere_benchm] topk=100 | times=3 | batch=100 | ef=100
+I20260423 11:28:23.541391 132986375708672 benchmark_main.cc:619] [KNOWHERE][RunSearchMode][knowhere_benchm] nb=1000000 | nq=1000 | dim=768
+I20260423 11:28:23.543066 132986375708672 index_factory.cc:59] [KNOWHERE][Create][knowhere_benchm] use key GPU_CAGRA_fp32 to create knowhere index GPU_CAGRA with version 8
+I20260423 11:29:52.781850 132986375708672 time_recorder.cc:49] [KNOWHERE][PrintTimeRecord][knowhere_benchm] Build index: done (89161.789664 ms)
+I20260423 11:29:52.781907 132986375708672 benchmark_main.cc:683] [KNOWHERE][RunSearchMode][knowhere_benchm] Saving index to: /home/ubuntu/data/cohere/cohere_GPU_CAGRA_D64_iter100_int8build_cpu.index
+I20260423 11:30:16.025343 132986375708672 benchmark_main.cc:697] [KNOWHERE][RunSearchMode][knowhere_benchm] Index saved (3344000249 bytes)
+I20260423 11:30:16.025378 132986375708672 benchmark_main.cc:702] [KNOWHERE][RunSearchMode][knowhere_benchm] Re-deserializing for adapt_for_cpu mode...
+I20260423 11:30:16.025386 132986375708672 index_factory.cc:59] [KNOWHERE][Create][knowhere_benchm] use key GPU_CAGRA_fp32 to create knowhere index GPU_CAGRA with version 8
+[INDEX_STATS] avg_neighbors=64.00
+I20260423 11:30:17.959748 132986375708672 time_recorder.cc:49] [KNOWHERE][PrintTimeRecord][knowhere_benchm] Load index: done (1934.253973 ms)
+I20260423 11:30:18.151271 132986375708672 thread_pool.cc:34] [SERVER][InitGlobalBuildThreadPool][knowhere_benchm][]Init global build thread pool with size 16
+I20260423 11:30:18.151565 132969301798912 thread_pool.h:67] [SERVER][operator()][knowhere_build0][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.151764 132969251442688 thread_pool.h:67] [SERVER][operator()][knowhere_build1][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.151900 132969226264576 thread_pool.h:67] [SERVER][operator()][knowhere_build2][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.151910 132969396281344 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.152272 132979334574080 thread_pool.h:67] [SERVER][operator()][knowhere_build3][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.152405 132979326181376 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.152601 132979317788672 thread_pool.h:67] [SERVER][operator()][knowhere_build4][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.152742 132978965475328 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.152922 132978957082624 thread_pool.h:67] [SERVER][operator()][knowhere_build5][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.153131 132978948689920 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.153295 132978940297216 thread_pool.h:67] [SERVER][operator()][knowhere_build6][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.153622 132978931904512 thread_pool.h:67] [SERVER][operator()][knowhere_build7][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.153935 132978923511808 thread_pool.h:67] [SERVER][operator()][knowhere_build8][]Successfully set priority of knowhere thread.
+I20260423 11:30:18.154249 132978915119104 thread_pool.h:67] [SERVER][operator()][knowhere_build9][]Successfully set priority of knowhere thread.
+I20260423 11:30:20.608587 132986375708672 benchmark_main.cc:735] [KNOWHERE][RunSearchMode][knowhere_benchm] === Benchmark Result ===
+I20260423 11:30:20.608616 132986375708672 benchmark_main.cc:736] [KNOWHERE][RunSearchMode][knowhere_benchm] index=GPU_CAGRA | repeat=3 | nq=1000 | topk=100 | batch=100
+I20260423 11:30:20.608622 132986375708672 benchmark_main.cc:738] [KNOWHERE][RunSearchMode][knowhere_benchm] build_time=89.1620s | search_time=1.8254s | qps=1643.49
+I20260423 11:30:20.608637 132986375708672 benchmark_main.cc:741] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_recall=0.9531 | min_recall=0.5600 | dist_recall=1.0000
+I20260423 11:30:20.608643 132986375708672 benchmark_main.cc:744] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_ndcg=0.9610 | min_ndcg=0.5179
+I20260423 11:30:20.608648 132986375708672 benchmark_main.cc:746] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_disterr=200.802933 | max_disterr=317.758392
+WARNING: Logging before InitGoogleLogging() is written to STDERR
+I20260423 11:30:21.562974 135955052449792 benchmark_main.cc:605] [KNOWHERE][RunSearchMode][knowhere_benchm] === Benchmark Config ===
+I20260423 11:30:21.563047 135955052449792 benchmark_main.cc:606] [KNOWHERE][RunSearchMode][knowhere_benchm] dataset=cohere | index=GPU_CAGRA (adapt_for_cpu)
+I20260423 11:30:21.563053 135955052449792 benchmark_main.cc:611] [KNOWHERE][RunSearchMode][knowhere_benchm] topk=100 | times=3 | batch=100 | ef=100
+I20260423 11:30:23.382981 135955052449792 benchmark_main.cc:619] [KNOWHERE][RunSearchMode][knowhere_benchm] nb=1000000 | nq=1000 | dim=768
+I20260423 11:30:23.384568 135955052449792 index_factory.cc:59] [KNOWHERE][Create][knowhere_benchm] use key GPU_CAGRA_fp32 to create knowhere index GPU_CAGRA with version 8
+I20260423 11:31:41.516857 135955052449792 time_recorder.cc:49] [KNOWHERE][PrintTimeRecord][knowhere_benchm] Build index: done (78057.427929 ms)
+I20260423 11:31:41.516914 135955052449792 benchmark_main.cc:683] [KNOWHERE][RunSearchMode][knowhere_benchm] Saving index to: /home/ubuntu/data/cohere/cohere_GPU_CAGRA_D64_iter100_cpu.index
+I20260423 11:32:06.606059 135955052449792 benchmark_main.cc:697] [KNOWHERE][RunSearchMode][knowhere_benchm] Index saved (3344000249 bytes)
+I20260423 11:32:06.606129 135955052449792 benchmark_main.cc:702] [KNOWHERE][RunSearchMode][knowhere_benchm] Re-deserializing for adapt_for_cpu mode...
+I20260423 11:32:06.606144 135955052449792 index_factory.cc:59] [KNOWHERE][Create][knowhere_benchm] use key GPU_CAGRA_fp32 to create knowhere index GPU_CAGRA with version 8
+[INDEX_STATS] avg_neighbors=64.00
+I20260423 11:32:08.502781 135955052449792 time_recorder.cc:49] [KNOWHERE][PrintTimeRecord][knowhere_benchm] Load index: done (1896.457102 ms)
+I20260423 11:32:08.692839 135955052449792 thread_pool.cc:34] [SERVER][InitGlobalBuildThreadPool][knowhere_benchm][]Init global build thread pool with size 16
+I20260423 11:32:08.693126 135941920931840 thread_pool.h:67] [SERVER][operator()][knowhere_build0][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.693311 135941813428224 thread_pool.h:67] [SERVER][operator()][knowhere_build1][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.693463 135941937717248 thread_pool.h:67] [SERVER][operator()][knowhere_build2][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.693511 135941788250112 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.693760 135944338403328 thread_pool.h:67] [SERVER][operator()][knowhere_build3][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.693976 135944330010624 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.694133 135944321617920 thread_pool.h:67] [SERVER][operator()][knowhere_build4][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.694329 135943969304576 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.694542 135943960911872 thread_pool.h:67] [SERVER][operator()][knowhere_build5][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.694701 135943952519168 thread_pool.h:67] [SERVER][operator()][Knowhere_Global][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.694836 135943944126464 thread_pool.h:67] [SERVER][operator()][knowhere_build6][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.695106 135943935733760 thread_pool.h:67] [SERVER][operator()][knowhere_build7][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.695421 135943927341056 thread_pool.h:67] [SERVER][operator()][knowhere_build8][]Successfully set priority of knowhere thread.
+I20260423 11:32:08.695715 135943918948352 thread_pool.h:67] [SERVER][operator()][knowhere_build9][]Successfully set priority of knowhere thread.
+I20260423 11:32:11.126365 135955052449792 benchmark_main.cc:735] [KNOWHERE][RunSearchMode][knowhere_benchm] === Benchmark Result ===
+I20260423 11:32:11.126396 135955052449792 benchmark_main.cc:736] [KNOWHERE][RunSearchMode][knowhere_benchm] index=GPU_CAGRA | repeat=3 | nq=1000 | topk=100 | batch=100
+I20260423 11:32:11.126400 135955052449792 benchmark_main.cc:738] [KNOWHERE][RunSearchMode][knowhere_benchm] build_time=78.0576s | search_time=1.8215s | qps=1646.99
+I20260423 11:32:11.126411 135955052449792 benchmark_main.cc:741] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_recall=0.9531 | min_recall=0.4900 | dist_recall=1.0000
+I20260423 11:32:11.126415 135955052449792 benchmark_main.cc:744] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_ndcg=0.9609 | min_ndcg=0.3967
+I20260423 11:32:11.126419 135955052449792 benchmark_main.cc:746] [KNOWHERE][RunSearchMode][knowhere_benchm] avg_disterr=12.830235 | max_disterr=15.224669

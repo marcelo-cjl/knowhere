@@ -51,6 +51,7 @@ struct GpuCuvsCagraConfig : public BaseConfig {
     CFG_BOOL adapt_for_cpu;
     CFG_INT ef;
     CFG_BOOL persistent;
+    CFG_BOOL build_with_int8;  // quantize fp32->int8 for graph build, keep fp32 for CPU search
 
     KNOWHERE_DECLARE_CONFIG(GpuCuvsCagraConfig) {
         KNOWHERE_CONFIG_DECLARE_FIELD(cache_dataset_on_device)
@@ -125,6 +126,10 @@ struct GpuCuvsCagraConfig : public BaseConfig {
             .description("use the persistent version of the search kernel (only supported with SINGLE_CTA)")
             .set_default(false)
             .for_search();
+        KNOWHERE_CONFIG_DECLARE_FIELD(build_with_int8)
+            .description("quantize fp32 to int8 for graph build; CPU search still uses fp32")
+            .set_default(false)
+            .for_train();
     }
 
     Status

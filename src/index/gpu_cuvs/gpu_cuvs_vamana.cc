@@ -19,7 +19,7 @@
 #include <sstream>
 #include <vector>
 
-#include "common/cuvs/integration/cagra_int8_from_fp32.hpp"
+#include "common/cuvs/integration/vamana_int8_from_fp32.hpp"
 #include "common/cuvs/proto/cuvs_index_kind.hpp"
 #include "gpu_cuvs.h"
 #include "hnswlib/hnswalg.h"
@@ -28,31 +28,36 @@
 #include "knowhere/index/index_node_thread_pool_wrapper.h"
 #include "raft/core/device_resources.hpp"
 #include "raft/util/cuda_rt_essentials.hpp"
+
 namespace knowhere {
 
 template <typename DataType>
-class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
+class GpuCuvsVamanaHybridIndexNode : public GpuCuvsVamanaIndexNode<DataType> {
  public:
     using DistType = float;
-    GpuCuvsCagraHybridIndexNode(int32_t version, const Object& object)
-        : GpuCuvsCagraIndexNode<DataType>(version, object) {
+    GpuCuvsVamanaHybridIndexNode(int32_t version, const Object& object)
+        : GpuCuvsVamanaIndexNode<DataType>(version, object) {
     }
 
     Status
     Train(const DataSetPtr dataset, std::shared_ptr<Config> cfg, bool use_knowhere_build_pool) override {
-        const GpuCuvsCagraConfig& cagra_cfg = static_cast<const GpuCuvsCagraConfig&>(*cfg);
-        if (cagra_cfg.adapt_for_cpu.value())
+        const GpuCuvsVamanaConfig& vamana_cfg = static_cast<const GpuCuvsVamanaConfig&>(*cfg);
+        if (vamana_cfg.adapt_for_cpu.value())
             adapt_for_cpu = true;
 
-        // Build CAGRA graph with int8-quantized data on GPU but keep fp32 for CPU
-        // search. The actual cuVS work runs here in Train() so Build-time metrics
-        // reflect reality; Serialize() below only ships the cached bytes.
+        // Build graph on GPU with int8-quantized data but serialize the original fp32
+        // dataset so that hnswlib CPU search still uses full precision. Only valid for
+        // the fp32 Hybrid instance + adapt_for_cpu mode. The actual cuVS work runs here
+        // in Train() so that Build-time metrics reflect reality; Serialize() below just
+        // ships the cached bytes.
         if constexpr (std::is_same_v<DataType, float>) {
-            if (adapt_for_cpu && cagra_cfg.build_with_int8.value_or(false)) {
+            if (adapt_for_cpu && vamana_cfg.build_with_int8.value_or(false)) {
                 int8_build_mode_ = true;
                 saved_rows_ = dataset->GetRows();
                 saved_cols_ = dataset->GetDim();
-                auto cuvs_config = to_cuvs_knowhere_config(cagra_cfg);
+                auto cuvs_config = to_cuvs_knowhere_config(vamana_cfg);
+                // Copy fp32 input into a scratch buffer (normalization + quantization
+                // both mutate it; we don't want to touch the caller's tensor).
                 std::vector<float> fp32_scratch(reinterpret_cast<const float*>(dataset->GetTensor()),
                                                 reinterpret_cast<const float*>(dataset->GetTensor()) +
                                                     static_cast<size_t>(saved_rows_) *
@@ -60,36 +65,57 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
                 std::stringbuf buf;
                 try {
                     std::ostream os(&buf);
-                    cuvs_knowhere::build_and_serialize_cagra_int8_fp32(os, cuvs_config, fp32_scratch.data(),
+                    cuvs_knowhere::build_and_serialize_vamana_int8_fp32(os, cuvs_config, fp32_scratch.data(),
                                                                         saved_rows_, saved_cols_);
                     os.flush();
                 } catch (const std::exception& e) {
-                    LOG_KNOWHERE_ERROR_ << "int8 cagra build failed: " << e.what();
+                    LOG_KNOWHERE_ERROR_ << "int8 vamana build failed: " << e.what();
                     return Status::cuvs_inner_error;
                 }
-                int8_serialized_bytes_ = buf.str();
+                int8_serialized_bytes_ = buf.str();  // keep until Serialize()
                 return Status::success;
             }
         }
 
-        return GpuCuvsCagraIndexNode<DataType>::Train(dataset, cfg, use_knowhere_build_pool);
+        return GpuCuvsVamanaIndexNode<DataType>::Train(dataset, cfg, use_knowhere_build_pool);
+    }
+
+    Status
+    Serialize(BinarySet& binset) const override {
+        if (int8_build_mode_) {
+            if (int8_serialized_bytes_.empty()) {
+                LOG_KNOWHERE_ERROR_ << "int8 build mode: serialized payload missing";
+                return Status::empty_index;
+            }
+            std::shared_ptr<uint8_t[]> index_binary(new (std::nothrow) uint8_t[int8_serialized_bytes_.size()]);
+            if (!index_binary) {
+                return Status::malloc_error;
+            }
+            std::memcpy(index_binary.get(), int8_serialized_bytes_.data(), int8_serialized_bytes_.size());
+            binset.Append(std::string(this->Type()), index_binary, int8_serialized_bytes_.size());
+            return Status::success;
+        }
+        // For adapt_for_cpu, we still use normal GPU format serialization
+        // The deserialization will convert GPU format to CPU-searchable format
+        return GpuCuvsVamanaIndexNode<DataType>::Serialize(binset);
     }
 
     expected<DataSetPtr>
     Search(const DataSetPtr dataset, std::unique_ptr<Config> cfg, const BitsetView& bitset,
            milvus::OpContext* op_context) const override {
         if (!adapt_for_cpu || hnsw_index_ == nullptr)
-            return GpuCuvsCagraIndexNode<DataType>::Search(dataset, std::move(cfg), bitset, op_context);
+            return GpuCuvsVamanaIndexNode<DataType>::Search(dataset, std::move(cfg), bitset, op_context);
         auto nq = dataset->GetRows();
         auto xq = dataset->GetTensor();
 
-        auto cagra_cfg = static_cast<const GpuCuvsCagraConfig&>(*cfg);
-        auto k = cagra_cfg.k.value();
+        auto vamana_cfg = static_cast<const GpuCuvsVamanaConfig&>(*cfg);
+        auto k = vamana_cfg.k.value();
+        auto ef = vamana_cfg.ef.has_value() ? vamana_cfg.ef.value() : 100;
 
         auto p_id = std::make_unique<int64_t[]>(k * nq);
         auto p_dist = std::make_unique<DistType[]>(k * nq);
 
-        hnswlib::SearchParam param{(size_t)cagra_cfg.ef.value()};
+        hnswlib::SearchParam param{(size_t)ef};
         bool transform = (hnsw_index_->metric_type_ == hnswlib::Metric::INNER_PRODUCT ||
                           hnsw_index_->metric_type_ == hnswlib::Metric::COSINE);
 
@@ -116,46 +142,13 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
 
         return res;
     }
-    Status
-    Serialize(BinarySet& binset) const override {
-        if (!adapt_for_cpu)
-            return GpuCuvsCagraIndexNode<DataType>::Serialize(binset);
-        auto result = Status::success;
-        std::stringbuf buf;
-        if (int8_build_mode_) {
-            if (int8_serialized_bytes_.empty()) {
-                LOG_KNOWHERE_ERROR_ << "int8 build mode: serialized payload missing";
-                return Status::empty_index;
-            }
-            buf.sputn(int8_serialized_bytes_.data(), int8_serialized_bytes_.size());
-        } else if (!this->index_.is_trained()) {
-            result = Status::empty_index;
-        } else {
-            std::ostream os(&buf);
-            try {
-                this->index_.serialize_to_hnswlib(os);
-                this->index_.synchronize(true);
-            } catch (const std::exception& e) {
-                LOG_KNOWHERE_ERROR_ << e.what();
-                result = Status::cuvs_inner_error;
-            }
-            os.flush();
-        }
-        if (result == Status::success) {
-            std::shared_ptr<uint8_t[]> index_binary(new (std::nothrow) uint8_t[buf.str().size()]);
-            memcpy(index_binary.get(), buf.str().c_str(), buf.str().size());
-            // Use the key to differentiate whether CPU search support is needed.
-            binset.Append(std::string(this->Type()) + "_cpu", index_binary, buf.str().size());
-        }
-        return result;
-    }
 
     int64_t
     Count() const override {
         if (int8_build_mode_ && hnsw_index_ == nullptr)
             return saved_rows_;
         if (!adapt_for_cpu)
-            return GpuCuvsCagraIndexNode<DataType>::Count();
+            return GpuCuvsVamanaIndexNode<DataType>::Count();
         if (!hnsw_index_) {
             return 0;
         }
@@ -164,26 +157,23 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
 
     Status
     Deserialize(const BinarySet& binset, std::shared_ptr<Config> cfg) override {
-        const GpuCuvsCagraConfig& cagra_cfg = static_cast<const GpuCuvsCagraConfig&>(*cfg);
-        if (cagra_cfg.adapt_for_cpu.value()) {
+        const GpuCuvsVamanaConfig& vamana_cfg = static_cast<const GpuCuvsVamanaConfig&>(*cfg);
+        if (vamana_cfg.adapt_for_cpu.value()) {
             adapt_for_cpu = true;
             if constexpr (std::is_same_v<DataType, std::int8_t>) {
-                // TODO: Add HNSW support for INT8
-                LOG_KNOWHERE_ERROR_ << "CAGRA+HNSW does not support INT8 data.";
+                LOG_KNOWHERE_ERROR_ << "VAMANA+HNSW does not support INT8 data.";
                 return Status::invalid_binary_set;
             } else {
                 BinaryPtr binary = nullptr;
                 hnswlib::SpaceInterface<float>* space = nullptr;
                 hnsw_index_.reset(new (std::nothrow) hnswlib::HierarchicalNSW<DataType, float, hnswlib::None>(space));
                 try {
-                    if ((binary = binset.GetByName(std::string(this->Type()) + "_cpu")) != nullptr) {
-                        MemoryIOReader reader(binary->data.get(), binary->size);
-                        hnsw_index_->loadIndex(reader);
-                    } else if ((binary = binset.GetByName(std::string(this->Type()))) != nullptr) {
+                    if ((binary = binset.GetByName(std::string(this->Type()))) != nullptr) {
                         std::stringbuf buf;
                         buf.sputn((char*)binary->data.get(), binary->size);
                         std::istream stream(&buf);
-                        hnsw_index_->loadIndexFromGpuFormat(stream);
+                        // Use Vamana-specific GPU format loader
+                        hnsw_index_->loadIndexFromVamanaGpuFormat(stream);
                     } else {
                         LOG_KNOWHERE_ERROR_ << "Invalid binary set.";
                         return Status::invalid_binary_set;
@@ -191,7 +181,7 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
                     hnsw_index_->base_layer_only = true;
 
                     // export graph if enabled
-                    auto base_cfg = static_cast<const knowhere::BaseConfig&>(cagra_cfg);
+                    auto base_cfg = static_cast<const knowhere::BaseConfig&>(vamana_cfg);
                     if (base_cfg.enable_export.has_value() && base_cfg.enable_export.value() &&
                         base_cfg.index_prefix.has_value()) {
                         hnsw_index_->exportGraph(base_cfg.index_prefix.value());
@@ -204,7 +194,7 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
             }
         }
 
-        return GpuCuvsCagraIndexNode<DataType>::Deserialize(binset, std::move(cfg));
+        return GpuCuvsVamanaIndexNode<DataType>::Deserialize(binset, std::move(cfg));
     }
 
     Status
@@ -222,55 +212,32 @@ class GpuCuvsCagraHybridIndexNode : public GpuCuvsCagraIndexNode<DataType> {
     std::unique_ptr<hnswlib::HierarchicalNSW<DataType, float, hnswlib::None>> hnsw_index_ = nullptr;
 };
 
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_CAGRA, GpuCuvsCagraHybridIndexNode, fp32,
+KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_VAMANA, GpuCuvsVamanaHybridIndexNode, fp32,
+                                          knowhere::feature::GPU_ANN_FLOAT_INDEX,
+                                          []() {
+                                              int count;
+                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
+                                              return count * cuda_concurrent_size_per_device;
+                                          }()
+
+);
+KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_VAMANA, GpuCuvsVamanaHybridIndexNode, fp32,
                                           knowhere::feature::GPU_ANN_FLOAT_INDEX, []() {
                                               int count;
                                               RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
                                               return count * cuda_concurrent_size_per_device;
                                           }());
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CAGRA, GpuCuvsCagraHybridIndexNode, fp32,
-                                          knowhere::feature::GPU_ANN_FLOAT_INDEX, []() {
-                                              int count;
-                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
-                                              return count * cuda_concurrent_size_per_device;
-                                          }());
-
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_CAGRA, GpuCuvsCagraHybridIndexNode, fp16,
-                                          knowhere::feature::GPU | knowhere::feature::FP16, []() {
-                                              int count;
-                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
-                                              return count * cuda_concurrent_size_per_device;
-                                          }());
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CAGRA, GpuCuvsCagraHybridIndexNode, fp16,
-                                          knowhere::feature::GPU | knowhere::feature::FP16, []() {
-                                              int count;
-                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
-                                              return count * cuda_concurrent_size_per_device;
-                                          }());
-// TODO: Add HNSW support for INT8. Not using the hybrid CAGRA+HNSW for INT8
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_CAGRA, GpuCuvsCagraIndexNode, int8,
+// INT8 does not support adapt_for_cpu yet
+KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_VAMANA, GpuCuvsVamanaIndexNode, int8,
                                           knowhere::feature::GPU | knowhere::feature::INT8, []() {
                                               int count;
                                               RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
                                               return count * cuda_concurrent_size_per_device;
                                           }());
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CAGRA, GpuCuvsCagraIndexNode, int8,
+KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_VAMANA, GpuCuvsVamanaIndexNode, int8,
                                           knowhere::feature::GPU | knowhere::feature::INT8, []() {
                                               int count;
                                               RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
                                               return count * cuda_concurrent_size_per_device;
                                           }());
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CUVS_CAGRA, GpuCuvsCagraHybridIndexNode, bin1,
-                                          knowhere::feature::GPU | knowhere::feature::BINARY, []() {
-                                              int count;
-                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
-                                              return count * cuda_concurrent_size_per_device;
-                                          }());
-KNOWHERE_REGISTER_GLOBAL_WITH_THREAD_POOL(GPU_CAGRA, GpuCuvsCagraHybridIndexNode, bin1,
-                                          knowhere::feature::GPU | knowhere::feature::BINARY, []() {
-                                              int count;
-                                              RAFT_CUDA_TRY(cudaGetDeviceCount(&count));
-                                              return count * cuda_concurrent_size_per_device;
-                                          }());
-
 }  // namespace knowhere

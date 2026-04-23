@@ -24,7 +24,11 @@ include(cmake/utils/platform_check.cmake)
 
 knowhere_option(WITH_CUVS "Build with CUVS indexes" OFF)
 if(WITH_CUVS)
-  set(CMAKE_CUDA_ARCHITECTURES RAPIDS)
+  # Let CMake auto-detect the current GPU's compute capability. Override with
+  # `-DCMAKE_CUDA_ARCHITECTURES=...` if you want to cross-compile for other GPUs.
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "75-real")
+  endif()
   set(CMAKE_CUDA_STANDARD 20)
   include(cmake/libs/librapids.cmake)
   project(knowhere CXX C CUDA)
