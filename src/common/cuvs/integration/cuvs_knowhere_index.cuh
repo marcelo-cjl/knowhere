@@ -20,7 +20,10 @@
 #include <cuvs/core/bitset.hpp>
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/neighbors/common.hpp>
+#include <cuvs/neighbors/detail/cagra/rowwise_sq8.cuh>
 #include <cuvs/neighbors/ivf_pq.hpp>
+#include <algorithm>
+#include <cstddef>
 #include <istream>
 #include <limits>
 #include <ostream>
@@ -150,6 +153,93 @@ normalize_int8_rows_for_cosine(raft::resources const& res, DeviceMatrixView devi
     raft::linalg::matrixVectorOp<true, false>(device_data_view.data_handle(), device_data_view.data_handle(),
                                               row_norms.data_handle(), feature_count, row_count,
                                               normalize_int8_cosine_op{}, stream);
+}
+
+template <typename SrcIdT, typename DstIdT, typename DistanceT>
+static __global__ void
+cast_and_check_results_kernel(DstIdT* __restrict__ dst_ids, const SrcIdT* __restrict__ src_ids,
+                              DistanceT* __restrict__ distances, std::size_t count, DstIdT max_id,
+                              DistanceT max_distance) {
+    for (auto i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
+         i += static_cast<std::size_t>(blockDim.x) * gridDim.x) {
+        auto id = static_cast<DstIdT>(src_ids[i]);
+        auto distance = distances[i];
+        if (distance >= max_distance || id >= max_id) {
+            id = DstIdT{-1};
+        }
+        if (distance < DistanceT{0}) {
+            distance = DistanceT{0};
+        }
+        dst_ids[i] = id;
+        distances[i] = distance;
+    }
+}
+
+template <typename SrcIdT, typename DstIdT, typename DistanceT>
+void
+cast_and_check_results(raft::resources const& res, DstIdT* dst_ids, const SrcIdT* src_ids, DistanceT* distances,
+                       std::size_t count, DstIdT max_id, DistanceT max_distance) {
+    if (count == 0) {
+        return;
+    }
+    constexpr auto block_size = 256;
+    const auto block_count = static_cast<int>(std::min<std::size_t>((count + block_size - 1) / block_size, 65535));
+    cast_and_check_results_kernel<<<block_count, block_size, 0, raft::resource::get_cuda_stream(res)>>>(
+        dst_ids, src_ids, distances, count, max_id, max_distance);
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
+}
+
+template <typename IdT, typename DistanceT>
+static __global__ void
+undo_rowwise_sq8_l2_postprocess_kernel(const IdT* __restrict__ ids, DistanceT* __restrict__ distances,
+                                       std::size_t count) {
+    for (auto i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
+         i += static_cast<std::size_t>(blockDim.x) * gridDim.x) {
+        if (ids[i] >= IdT{0}) {
+            constexpr auto sq8_scale = DistanceT{128} * DistanceT{128};
+            distances[i] /= sq8_scale;
+        }
+    }
+}
+
+template <typename IdT, typename DistanceT>
+void
+undo_rowwise_sq8_l2_postprocess(raft::resources const& res, const IdT* ids, DistanceT* distances, std::size_t count) {
+    if (count == 0) {
+        return;
+    }
+    constexpr auto block_size = 256;
+    const auto block_count = static_cast<int>(std::min<std::size_t>((count + block_size - 1) / block_size, 65535));
+    undo_rowwise_sq8_l2_postprocess_kernel<<<block_count, block_size, 0, raft::resource::get_cuda_stream(res)>>>(
+        ids, distances, count);
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
+}
+
+template <typename IdT, typename DistanceT>
+static __global__ void
+rowwise_sq8_l2_to_cosine_similarity_kernel(const IdT* __restrict__ ids, DistanceT* __restrict__ distances,
+                                           std::size_t count) {
+    for (auto i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
+         i += static_cast<std::size_t>(blockDim.x) * gridDim.x) {
+        if (ids[i] >= IdT{0}) {
+            constexpr auto sq8_scale = DistanceT{128} * DistanceT{128};
+            distances[i] = DistanceT{1} - DistanceT{0.5} * (distances[i] / sq8_scale);
+        }
+    }
+}
+
+template <typename IdT, typename DistanceT>
+void
+rowwise_sq8_l2_to_cosine_similarity(raft::resources const& res, const IdT* ids, DistanceT* distances,
+                                    std::size_t count) {
+    if (count == 0) {
+        return;
+    }
+    constexpr auto block_size = 256;
+    const auto block_count = static_cast<int>(std::min<std::size_t>((count + block_size - 1) / block_size, 65535));
+    rowwise_sq8_l2_to_cosine_similarity_kernel<<<block_count, block_size, 0, raft::resource::get_cuda_stream(res)>>>(
+        ids, distances, count);
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
 }
 
 }  // namespace detail
@@ -590,28 +680,32 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
 
         auto device_knowhere_ids_storage =
             std::optional<raft::device_matrix<knowhere_indexing_type, input_indexing_type>>{};
-        auto device_knowhere_ids = [&device_knowhere_ids_storage, &res, row_count, k, device_ids]() {
-            if constexpr (std::is_signed_v<indexing_type>) {
+        auto device_knowhere_ids = [&]() {
+            if constexpr (std::is_same_v<indexing_type, knowhere_indexing_type>) {
                 return device_ids;
             } else {
                 device_knowhere_ids_storage =
                     raft::make_device_matrix<knowhere_indexing_type, input_indexing_type>(res, row_count, k);
-                raft::copy(res, device_knowhere_ids_storage->view(), device_ids);
+                detail::cast_and_check_results(res, device_knowhere_ids_storage->data_handle(), device_ids.data_handle(),
+                                               device_distances.data_handle(), static_cast<std::size_t>(output_size),
+                                               knowhere_indexing_type(size()), max_distance);
                 return device_knowhere_ids_storage->view();
             }
         }();
 
-        auto device_post_process = detail::check_valid_entry<knowhere_distance_type, knowhere_indexing_type>{
-            max_distance, knowhere_indexing_type(size())};
-        thrust::transform(
-            raft::resource::get_thrust_policy(res),
-            thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle()),
-            thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle() + device_knowhere_ids.size()),
-            thrust::device_ptr<knowhere_distance_type>(device_distances.data_handle()),
-            thrust::make_zip_iterator(
-                thrust::make_tuple(thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle()),
-                                   thrust::device_ptr<knowhere_distance_type>(device_distances.data_handle()))),
-            device_post_process);
+        if constexpr (std::is_same_v<indexing_type, knowhere_indexing_type>) {
+            auto device_post_process = detail::check_valid_entry<knowhere_distance_type, knowhere_indexing_type>{
+                max_distance, knowhere_indexing_type(size())};
+            thrust::transform(
+                raft::resource::get_thrust_policy(res),
+                thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle()),
+                thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle() + device_knowhere_ids.size()),
+                thrust::device_ptr<knowhere_distance_type>(device_distances.data_handle()),
+                thrust::make_zip_iterator(
+                    thrust::make_tuple(thrust::device_ptr<knowhere_indexing_type>(device_knowhere_ids.data_handle()),
+                                       thrust::device_ptr<knowhere_distance_type>(device_distances.data_handle()))),
+                device_post_process);
+        }
 
         if (config.metric_type == knowhere::metric::COSINE) {
             if constexpr (std::is_same_v<data_type, std::int8_t>) {
@@ -726,6 +820,273 @@ struct cuvs_knowhere_index<IndexKind, DataType>::impl {
     std::optional<cuvs_index_type> index_ = std::nullopt;
     int device_id = select_device_id();
     std::optional<raft::device_matrix<data_type, input_indexing_type>> device_dataset_storage = std::nullopt;
+};
+
+template <>
+struct cuvs_knowhere_index<cuvs_proto::cuvs_index_kind::cagra, knowhere::fp32>::impl {
+    auto static constexpr index_kind = cuvs_proto::cuvs_index_kind::cagra;
+    using data_type = float;
+    using sq8_data_type = std::int8_t;
+    using indexing_type = cuvs_indexing_t<index_kind>;
+    using input_indexing_type = cuvs_input_indexing_t<index_kind>;
+    using cuvs_index_type = cuvs_index_t<index_kind, sq8_data_type>;
+
+    impl() {
+    }
+
+    auto
+    is_trained() const {
+        return index_.has_value();
+    }
+
+    [[nodiscard]] auto
+    size() const {
+        auto result = std::int64_t{};
+        if (is_trained()) {
+            result = index_->size();
+        }
+        return result;
+    }
+
+    [[nodiscard]] auto
+    dim() const {
+        auto result = std::int64_t{};
+        if (is_trained()) {
+            result = index_->dim();
+        }
+        return result;
+    }
+
+    static void
+    CheckMetric(cuvs_knowhere_config const& config) {
+        RAFT_EXPECTS(config.metric_type == knowhere::metric::L2 || config.metric_type == knowhere::metric::COSINE,
+                     "GPU_CAGRA fp32 internal rowwise SQ8 supports L2 and COSINE only");
+    }
+
+    static bool
+    IsCosineMetric(cuvs_knowhere_config const& config) {
+        return config.metric_type == knowhere::metric::COSINE;
+    }
+
+    static cuvs_knowhere_config
+    InternalL2Config(cuvs_knowhere_config config) {
+        if (IsCosineMetric(config)) {
+            config.metric_type = knowhere::metric::L2;
+        }
+        return config;
+    }
+
+    void
+    train(cuvs_knowhere_config const& config, data_type const* data, knowhere_indexing_type row_count,
+          knowhere_indexing_type feature_count) {
+        CheckMetric(config);
+        auto scoped_device = raft::device_setter{device_id};
+        auto index_params = config_to_index_params<index_kind>(InternalL2Config(config));
+        index_params.attach_dataset_on_build = true;
+
+        auto const& res = get_device_resources_without_mempool();
+        auto host_data = raft::make_host_matrix_view(data, row_count, feature_count);
+        auto device_float = raft::make_device_matrix<data_type, input_indexing_type>(res, row_count, feature_count);
+        raft::copy(res, device_float.view(), host_data);
+        if (IsCosineMetric(config)) {
+            auto device_float_view = device_float.view();
+            raft::linalg::row_normalize<raft::linalg::NormType::L2Norm>(
+                res, raft::make_const_mdspan(device_float_view), device_float_view);
+        }
+
+        device_dataset_storage = raft::make_device_matrix<sq8_data_type, input_indexing_type>(res, row_count, feature_count);
+        device_dataset_params = raft::make_device_matrix<float, input_indexing_type>(res, row_count, 4);
+        cuvs::neighbors::cagra::detail::encode_rowwise_sq8(
+            res,
+            raft::make_const_mdspan(device_float.view()),
+            device_dataset_storage->view(),
+            device_dataset_params->view());
+
+        index_params.rowwise_sq8_dataset_params = device_dataset_params->data_handle();
+        index_ = cuvs_index_type::template build<sq8_data_type, indexing_type, input_indexing_type>(
+            res, index_params, raft::make_const_mdspan(device_dataset_storage->view()));
+    }
+
+    auto
+    search(cuvs_knowhere_config const& config, data_type const* data, knowhere_indexing_type row_count,
+           knowhere_indexing_type feature_count, knowhere_bitset_data_type const* bitset_data,
+           knowhere_bitset_indexing_type bitset_byte_size, knowhere_bitset_indexing_type bitset_size) const {
+        CheckMetric(config);
+        auto scoped_device = raft::device_setter{device_id};
+        auto const& res = raft::device_resources_manager::get_device_resources();
+        auto k = knowhere_indexing_type(config.k);
+        auto search_params = config_to_search_params<index_kind>(InternalL2Config(config));
+        search_params.rowwise_sq8_dataset_params =
+            device_dataset_params ? device_dataset_params->data_handle() : nullptr;
+        RAFT_EXPECTS(search_params.rowwise_sq8_dataset_params != nullptr,
+                     "GPU_CAGRA SQ8 search requires dataset SQ8 params");
+
+        auto host_data = raft::make_host_matrix_view(data, row_count, feature_count);
+        auto device_float = raft::make_device_matrix<data_type, input_indexing_type>(res, row_count, feature_count);
+        raft::copy(res, device_float.view(), host_data);
+        if (IsCosineMetric(config)) {
+            auto device_float_view = device_float.view();
+            raft::linalg::row_normalize<raft::linalg::NormType::L2Norm>(
+                res, raft::make_const_mdspan(device_float_view), device_float_view);
+        }
+
+        auto device_query_storage = raft::make_device_matrix<sq8_data_type, input_indexing_type>(res, row_count, feature_count);
+        auto device_query_params = raft::make_device_matrix<float, input_indexing_type>(res, row_count, 4);
+        cuvs::neighbors::cagra::detail::encode_rowwise_sq8(
+            res,
+            raft::make_const_mdspan(device_float.view()),
+            device_query_storage.view(),
+            device_query_params.view());
+        search_params.rowwise_sq8_query_params = device_query_params.data_handle();
+
+        auto device_bitset = std::optional<
+            cuvs::core::bitset<knowhere_bitset_internal_data_type, knowhere_bitset_internal_indexing_type>>{};
+        if (bitset_data != nullptr && bitset_byte_size != 0) {
+            device_bitset =
+                cuvs::core::bitset<knowhere_bitset_internal_data_type, knowhere_bitset_internal_indexing_type>(
+                    res, bitset_size);
+            raft::copy(res,
+                       raft::make_device_vector_view<knowhere_bitset_data_type, knowhere_bitset_indexing_type>(
+                           reinterpret_cast<knowhere_bitset_data_type*>(device_bitset->data()), bitset_byte_size),
+                       raft::make_host_vector_view(bitset_data, bitset_byte_size));
+            if (device_bitset) {
+                device_bitset->flip(res);
+            }
+        }
+
+        auto output_size = row_count * k;
+        auto ids = std::unique_ptr<knowhere_indexing_type[]>(new knowhere_indexing_type[output_size]);
+        auto distances = std::unique_ptr<knowhere_distance_type[]>(new knowhere_distance_type[output_size]);
+
+        auto host_ids = raft::make_host_matrix_view(ids.get(), row_count, k);
+        auto host_distances = raft::make_host_matrix_view(distances.get(), row_count, k);
+
+        auto device_ids_storage = raft::make_device_matrix<indexing_type, input_indexing_type>(res, row_count, k);
+        auto device_distances_storage =
+            raft::make_device_matrix<knowhere_distance_type, input_indexing_type>(res, row_count, k);
+        auto device_ids = device_ids_storage.view();
+        auto device_distances = device_distances_storage.view();
+
+        RAFT_EXPECTS(index_, "Index has not yet been trained");
+        auto dataset_view = std::optional<raft::device_matrix_view<const sq8_data_type, input_indexing_type>>{};
+        if (device_dataset_storage) {
+            dataset_view = raft::make_const_mdspan(device_dataset_storage->view());
+        }
+
+        if (device_bitset) {
+            auto bitset_view = device_bitset->view();
+            bitset_view.set_original_nbits(sizeof(knowhere_bitset_data_type) * 8);
+            cuvs_index_type::search(
+                res, *index_, search_params, raft::make_const_mdspan(device_query_storage.view()), device_ids,
+                device_distances, config.refine_ratio, input_indexing_type{}, dataset_view,
+                cuvs::neighbors::filtering::bitset_filter<knowhere_bitset_internal_data_type,
+                                                          knowhere_bitset_internal_indexing_type>{bitset_view});
+        } else {
+            cuvs_index_type::search(
+                res, *index_, search_params, raft::make_const_mdspan(device_query_storage.view()), device_ids,
+                device_distances, config.refine_ratio, input_indexing_type{}, dataset_view);
+        }
+
+        auto max_distance =
+            std::nextafter(std::numeric_limits<knowhere_distance_type>::max(), knowhere_distance_type{0});
+        auto device_knowhere_ids_storage =
+            raft::make_device_matrix<knowhere_indexing_type, input_indexing_type>(res, row_count, k);
+        detail::cast_and_check_results(res, device_knowhere_ids_storage.data_handle(), device_ids.data_handle(),
+                                       device_distances.data_handle(), static_cast<std::size_t>(output_size),
+                                       knowhere_indexing_type(size()), max_distance);
+        auto device_knowhere_ids = device_knowhere_ids_storage.view();
+        if (IsCosineMetric(config)) {
+            detail::rowwise_sq8_l2_to_cosine_similarity(
+                res, device_knowhere_ids.data_handle(), device_distances.data_handle(), static_cast<std::size_t>(output_size));
+        } else {
+            detail::undo_rowwise_sq8_l2_postprocess(
+                res, device_knowhere_ids.data_handle(), device_distances.data_handle(), static_cast<std::size_t>(output_size));
+        }
+
+        raft::copy(res, host_ids, device_knowhere_ids);
+        raft::copy(res, host_distances, device_distances);
+        return std::make_tuple(ids.release(), distances.release());
+    }
+
+    void
+    range_search() const {
+        RAFT_FAIL("Range search not yet implemented for RAFT indexes");
+    }
+
+    void
+    get_vector_by_id() const {
+        RAFT_FAIL("Vector reconstruction not yet implemented for RAFT indexes");
+    }
+
+    void
+    serialize(std::ostream& os) const {
+        auto scoped_device = raft::device_setter{device_id};
+        auto const& res = get_device_resources_without_mempool();
+        RAFT_EXPECTS(index_, "Index has not yet been trained");
+        RAFT_EXPECTS(device_dataset_params, "GPU_CAGRA SQ8 params are missing");
+        cuvs_index_type::template serialize<sq8_data_type, indexing_type>(res, os, *index_);
+        raft::serialize_scalar(res, os, device_dataset_params->extent(0));
+        raft::serialize_scalar(res, os, device_dataset_params->extent(1));
+        raft::serialize_mdspan(res, os, device_dataset_params->view());
+    }
+
+    void
+    serialize_to_hnswlib(std::ostream&) const {
+        RAFT_FAIL("GPU_CAGRA fp32 uses internal SQ8 and cannot be serialized as fp32 hnswlib");
+    }
+
+    auto static deserialize(std::istream& is) {
+        auto static device_count = []() {
+            auto result = 0;
+            RAFT_CUDA_TRY(cudaGetDeviceCount(&result));
+            RAFT_EXPECTS(result != 0, "No CUDA devices found");
+            return result;
+        }();
+        int new_device_id = 0;
+        size_t free, total;
+        size_t max_free = 0;
+        for (int i = 0; i < device_count; ++i) {
+            auto scoped_device = raft::device_setter{i};
+            RAFT_CUDA_TRY(cudaMemGetInfo(&free, &total));
+            if (max_free < free) {
+                max_free = free;
+                new_device_id = i;
+            }
+        }
+        auto scoped_device = raft::device_setter{new_device_id};
+        auto const& res = get_device_resources_without_mempool();
+        auto des_index = cuvs_index_type::template deserialize<sq8_data_type, indexing_type>(res, is);
+
+        auto rows = raft::deserialize_scalar<input_indexing_type>(res, is);
+        auto cols = raft::deserialize_scalar<input_indexing_type>(res, is);
+        RAFT_EXPECTS(cols == 4, "Invalid GPU_CAGRA SQ8 params width");
+        auto params = raft::make_device_matrix<float, input_indexing_type>(res, rows, cols);
+        raft::deserialize_mdspan(res, is, params.view());
+
+        return std::make_unique<cuvs_knowhere_index<index_kind, knowhere::fp32>::impl>(
+            std::move(des_index), new_device_id, std::move(params));
+    }
+
+    void
+    synchronize(bool is_without_mempool = false) const {
+        auto scoped_device = raft::device_setter{device_id};
+        if (is_without_mempool) {
+            get_device_resources_without_mempool().sync_stream();
+        } else {
+            raft::device_resources_manager::get_device_resources().sync_stream();
+        }
+    }
+
+    impl(cuvs_index_type&& index, int new_device_id,
+         std::optional<raft::device_matrix<float, input_indexing_type>>&& params)
+        : index_{std::move(index)}, device_id{new_device_id}, device_dataset_params{std::move(params)} {
+    }
+
+ private:
+    std::optional<cuvs_index_type> index_ = std::nullopt;
+    int device_id = select_device_id();
+    std::optional<raft::device_matrix<sq8_data_type, input_indexing_type>> device_dataset_storage = std::nullopt;
+    std::optional<raft::device_matrix<float, input_indexing_type>> device_dataset_params = std::nullopt;
 };
 
 template <cuvs_proto::cuvs_index_kind IndexKind, typename DataType>
